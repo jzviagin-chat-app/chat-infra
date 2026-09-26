@@ -24,7 +24,7 @@ spec:
       containers:
         - name: chat
           # The tag is bumped automatically by a PR from the chat-service pipeline.
-          image: ghcr.io/jzviagin-chat-app/chat-service:sha-initial
+          image: ghcr.io/jzviagin-chat-app/chat-service:sha-5afed8332bf5
           ports:
             - containerPort: 8000
           env:
