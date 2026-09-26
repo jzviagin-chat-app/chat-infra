@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars and fill in. Values come from ~/.oci/config.
+region             = "eu-frankfurt-1"
+tenancy_ocid       = "ocid1.tenancy.oc1..aaaa..."
+budget_alert_email = "you@example.com"
+
+# Optional:
+# ssh_source_cidr           = "1.2.3.4/32"   # your IP only (curl ifconfig.me)
+# availability_domain_index = 1             # if you hit "Out of host capacity"

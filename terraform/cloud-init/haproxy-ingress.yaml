@@ -1,0 +1,22 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: haproxy-ingress
+  namespace: kube-system
+spec:
+  repo: https://haproxytech.github.io/helm-charts
+  chart: kubernetes-ingress
+  targetNamespace: haproxy-controller
+  createNamespace: true
+  valuesContent: |-
+    controller:
+      replicaCount: 1
+      nodeSelector:
+        role: lb
+      ingressClassResource:
+        default: true
+      service:
+        type: LoadBalancer
+      config:
+        load-balance: leastconn
+        timeout-tunnel: 1h

@@ -1,0 +1,36 @@
+#cloud-config
+# Runs once, on the LB VM's first boot. Rendered by Terraform (templatefile).
+
+write_files:
+  # k3s auto-applies anything in this folder when it starts.
+
+  # HAProxy ingress controller = our load balancer.
+  - path: /var/lib/rancher/k3s/server/manifests/haproxy-ingress.yaml
+    permissions: "0600"
+    content: |
+      ${indent(6, haproxy_values)}
+
+  # Argo CD = GitOps controller: keeps the cluster in sync with the k8s/ folder of the infra repo.
+  - path: /var/lib/rancher/k3s/server/manifests/argocd.yaml
+    permissions: "0600"
+    content: |
+      ${indent(6, argocd_values)}
+
+  # The Argo CD "Application" that points at the infra repo. Helm retries it
+  # until Argo CD's resource types exist.
+  - path: /var/lib/rancher/k3s/server/manifests/argocd-apps.yaml
+    permissions: "0600"
+    content: |
+      ${indent(6, argocd_apps)}
+
+runcmd:
+  # Oracle's Ubuntu image rejects all inbound/forwarded traffic except SSH.
+  # The cloud firewall (network security groups in Terraform) is our real
+  # firewall, so drop the OS-level reject rules. k3s needs forwarding between pods.
+  - iptables -D INPUT -j REJECT --reject-with icmp-host-prohibited || true
+  - iptables -D FORWARD -j REJECT --reject-with icmp-host-prohibited || true
+  - netfilter-persistent save
+  # k3s server = control plane. Built-in Traefik is disabled because we use HAProxy.
+  # Labels: role=lb pins the ingress and Argo CD here; enablelb makes this the
+  # only node that exposes ports 80/443.
+  - curl -sfL https://get.k3s.io | K3S_TOKEN='${k3s_token}' INSTALL_K3S_EXEC='server --disable traefik --write-kubeconfig-mode 644 --node-label role=lb --node-label svccontroller.k3s.cattle.io/enablelb=true' sh -

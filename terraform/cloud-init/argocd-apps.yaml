@@ -1,0 +1,25 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: argocd-apps
+  namespace: kube-system
+spec:
+  repo: https://argoproj.github.io/argo-helm
+  chart: argocd-apps
+  targetNamespace: argocd
+  valuesContent: |-
+    applications:
+      chat:
+        namespace: argocd
+        project: default
+        source:
+          repoURL: ${gitops_repo_url}
+          targetRevision: main
+          path: k8s
+        destination:
+          server: https://kubernetes.default.svc
+          namespace: default
+        syncPolicy:
+          automated:
+            prune: true
+            selfHeal: true

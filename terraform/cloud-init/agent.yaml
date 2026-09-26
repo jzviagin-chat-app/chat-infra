@@ -1,0 +1,11 @@
+#cloud-config
+# Runs once, on each worker VM's first boot. Rendered by Terraform (templatefile).
+
+runcmd:
+  # Same as the server: the cloud firewall (NSGs) is the real firewall.
+  - iptables -D INPUT -j REJECT --reject-with icmp-host-prohibited || true
+  - iptables -D FORWARD -j REJECT --reject-with icmp-host-prohibited || true
+  - netfilter-persistent save
+  # Install k3s as an agent and join the server. If the server is not up yet,
+  # the agent keeps retrying until it is.
+  - curl -sfL https://get.k3s.io | K3S_URL='https://${server_ip}:6443' K3S_TOKEN='${k3s_token}' INSTALL_K3S_EXEC='agent --node-label role=worker' sh -
