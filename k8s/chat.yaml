@@ -38,6 +38,10 @@ spec:
                   fieldPath: spec.nodeName
             - name: INSTANCE # what the greeting prints
               value: "$(POD_NAME) on $(NODE_NAME)"
+            - name: INSTANCE_ID # unique per pod: names this instance's pub/sub channel inst:<id>
+              value: "$(POD_NAME)"
+            - name: REDIS_URL # the redis Service, found through cluster DNS
+              value: redis://redis:6379/0
           resources:
             requests:
               cpu: 250m

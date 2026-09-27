@@ -1,0 +1,78 @@
+# Redis: connection registry, presence and the pub/sub bus between chat instances.
+# Holds only data that can be rebuilt, so no persistence: a restart loses nothing important.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # never two Redis pods at once
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      nodeSelector:
+        role: lb # stateful things stay on the fixed node, never on (future autoscaled) workers
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          args:
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - 200mb
+            - --maxmemory-policy
+            - noeviction # fail loudly instead of silently dropping registry keys
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis # chat pods connect to redis://redis:6379
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+# Only chat pods may talk to Redis. Nothing else in the cluster, and nothing from outside.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: chat
+      ports:
+        - port: 6379
