@@ -1,0 +1,1 @@
+sealed-secrets-key-backup* # extra protection: the key backup can never be committed
