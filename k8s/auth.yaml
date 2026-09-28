@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      nodeSelector:
+        role: worker # stateless, like chat: runs on the workers
+      topologySpreadConstraints: # one per worker VM where possible
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: auth
+      containers:
+        - name: auth
+          # The tag is bumped automatically by a PR from the auth-service pipeline.
+          image: ghcr.io/jzviagin-chat-app/auth-service:sha-initial
+          ports:
+            - containerPort: 8000
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth # other services reach it at http://auth:8000
+spec:
+  selector:
+    app: auth
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: auth

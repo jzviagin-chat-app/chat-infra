@@ -7,6 +7,14 @@ spec:
   rules:
     - http:
         paths:
+          # The most specific prefix wins: /auth/... goes to auth, everything else to chat.
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth
+                port:
+                  number: 8000
           - path: /
             pathType: Prefix
             backend:
