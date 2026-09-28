@@ -7,7 +7,9 @@ metadata:
     cert-manager.io/cluster-issuer: letsencrypt
     # Plain http:// keeps working for now (the certificate challenge uses port 80).
     # Switch to "true" once https is confirmed working.
+    cert-manager.io/cluster-issuer: letsencrypt
     haproxy.org/ssl-redirect: "true"
+    haproxy.org/ssl-redirect-port: "443"
 spec:
   ingressClassName: haproxy
   tls:
