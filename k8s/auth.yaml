@@ -24,7 +24,7 @@ spec:
       containers:
         - name: auth
           # The tag is bumped automatically by a PR from the auth-service pipeline.
-          image: ghcr.io/jzviagin-chat-app/auth-service:sha-initial
+          image: ghcr.io/jzviagin-chat-app/auth-service:sha-4192491a6be2
           ports:
             - containerPort: 8000
           env:
