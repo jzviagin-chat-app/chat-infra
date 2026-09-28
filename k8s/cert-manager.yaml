@@ -1,0 +1,27 @@
+# cert-manager: requests TLS certificates from Let's Encrypt and renews them before they expire.
+# Installed by k3s's Helm controller; Argo CD only applies this object.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: cert-manager
+  namespace: kube-system
+spec:
+  repo: https://charts.jetstack.io
+  chart: cert-manager
+  targetNamespace: cert-manager
+  createNamespace: true
+  valuesContent: |-
+    crds:
+      enabled: true
+    # Keep infrastructure on the fixed node; workers are for app pods.
+    nodeSelector:
+      role: lb
+    webhook:
+      nodeSelector:
+        role: lb
+    cainjector:
+      nodeSelector:
+        role: lb
+    startupapicheck:
+      nodeSelector:
+        role: lb

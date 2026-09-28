@@ -2,10 +2,21 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: chat
+  annotations:
+    # cert-manager sees this and creates the certificate for the host below.
+    cert-manager.io/cluster-issuer: letsencrypt
+    # Plain http:// keeps working for now (the certificate challenge uses port 80).
+    # Switch to "true" once https is confirmed working.
+    haproxy.org/ssl-redirect: "false"
 spec:
   ingressClassName: haproxy
+  tls:
+    - hosts:
+        - jzviagin-chat-app.129-159-150-34.sslip.io
+      secretName: public-tls
   rules:
-    - http:
+    - host: jzviagin-chat-app.129-159-150-34.sslip.io
+      http:
         paths:
           # The most specific prefix wins: /auth/... goes to auth, everything else to chat.
           - path: /auth

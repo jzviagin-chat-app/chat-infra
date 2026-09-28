@@ -1,0 +1,18 @@
+# How certificates are obtained: Let's Encrypt, proving we own the hostname by answering
+# an HTTP request on port 80 (HTTP-01 challenge) through the HAProxy ingress.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+  annotations:
+    # This type only exists once cert-manager is installed; don't fail the whole sync before that.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: haproxy
