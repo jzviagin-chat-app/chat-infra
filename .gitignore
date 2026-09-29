@@ -1,1 +1,7 @@
 sealed-secrets-key-backup* # extra protection: the key backup can never be committed
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+sealed-secrets-key-backup*
