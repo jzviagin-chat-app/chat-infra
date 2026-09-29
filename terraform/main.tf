@@ -10,9 +10,9 @@ locals {
   ad_name        = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
   ssh_key        = file(pathexpand(var.ssh_public_key_path))
 
-  total_ocpus     = var.lb_ocpus + var.worker_count * var.worker_ocpus
-  total_memory_gb = var.lb_memory_gb + var.worker_count * var.worker_memory_gb
-  total_disk_gb   = (1 + var.worker_count) * var.boot_volume_gb
+  total_ocpus     = var.lb_ocpus + var.ops_ocpus + var.worker_count * var.worker_ocpus
+  total_memory_gb = var.lb_memory_gb + var.ops_memory_gb + var.worker_count * var.worker_memory_gb
+  total_disk_gb   = (2 + var.worker_count) * var.boot_volume_gb # lb + ops + workers
 }
 
 # ---------------------------------------------------------------------------
@@ -264,6 +264,7 @@ resource "oci_core_instance_configuration" "worker" {
           k3s_token = random_password.k3s_token.result
           server_ip = local.lb_private_ip
           vcn_cidr  = local.vcn_cidr
+          node_role = "worker"
         }))
       }
     }
@@ -271,6 +272,53 @@ resource "oci_core_instance_configuration" "worker" {
 
   lifecycle {
     ignore_changes = [instance_details[0].launch_details[0].source_details[0].image_id]
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Ops VM: a fixed (never autoscaled) k3s agent for stateful and operational
+# workloads: Postgres, logs/traces/metrics. Pods land here only if they ask
+# for nodeSelector role=ops.
+# ---------------------------------------------------------------------------
+resource "oci_core_instance" "ops" {
+  depends_on = [terraform_data.free_tier_guard, oci_core_instance.lb]
+
+  compartment_id      = local.compartment_id
+  availability_domain = local.ad_name
+  display_name        = "chat-ops"
+  shape               = local.shape
+
+  shape_config {
+    ocpus         = var.ops_ocpus
+    memory_in_gbs = var.ops_memory_gb
+  }
+
+  create_vnic_details {
+    subnet_id        = oci_core_subnet.public.id
+    assign_public_ip = true # needed to download k3s and images; no inbound web ports are open
+    hostname_label   = "ops"
+    nsg_ids          = [oci_core_network_security_group.cluster.id]
+  }
+
+  source_details {
+    source_type             = "image"
+    source_id               = data.oci_core_images.ubuntu.images[0].id
+    boot_volume_size_in_gbs = var.boot_volume_gb
+  }
+
+  metadata = {
+    ssh_authorized_keys = local.ssh_key
+    user_data = base64encode(templatefile("${path.module}/cloud-init/agent.yaml", {
+      k3s_token = random_password.k3s_token.result
+      server_ip = local.lb_private_ip
+      vcn_cidr  = local.vcn_cidr
+      node_role = "ops"
+    }))
+  }
+
+  lifecycle {
+    # A newer Ubuntu image must not silently replace the running VM (and its data).
+    ignore_changes = [source_details[0].source_id, metadata]
   }
 }
 

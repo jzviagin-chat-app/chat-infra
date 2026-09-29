@@ -7,7 +7,11 @@ output "ssh_lb" {
 }
 
 output "websocket_url" {
-  value = "ws://${oci_core_instance.lb.public_ip}/ws"
+  value = "wss://jzviagin-chat-app.${replace(oci_core_instance.lb.public_ip, ".", "-")}.sslip.io/ws"
+}
+
+output "ssh_ops" {
+  value = "ssh ubuntu@${oci_core_instance.ops.public_ip}"
 }
 
 output "free_tier_usage" {

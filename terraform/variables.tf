@@ -70,6 +70,16 @@ variable "boot_volume_gb" {
   default     = 50
 }
 
+variable "ops_ocpus" {
+  type    = number
+  default = 1
+}
+
+variable "ops_memory_gb" {
+  type    = number
+  default = 6
+}
+
 variable "gitops_repo_url" {
   description = "Repo Argo CD watches; everything under its k8s/ folder is deployed to the cluster"
   type        = string
