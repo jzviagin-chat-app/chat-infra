@@ -80,6 +80,23 @@ variable "ops_memory_gb" {
   default = 6
 }
 
+variable "observability_user_email" {
+  description = "Email for the 'observability' service user (Oracle requires one). A plus-address like you+observability@gmail.com works."
+  type        = string
+}
+
+variable "logs_bucket_max_days" {
+  description = "Safety net: log objects older than this are deleted by the bucket itself"
+  type        = number
+  default     = 14
+}
+
+variable "traces_bucket_max_days" {
+  description = "Safety net: trace objects older than this are deleted by the bucket itself"
+  type        = number
+  default     = 7
+}
+
 variable "gitops_repo_url" {
   description = "Repo Argo CD watches; everything under its k8s/ folder is deployed to the cluster"
   type        = string

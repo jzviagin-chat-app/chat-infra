@@ -2,6 +2,7 @@
 region             = "eu-frankfurt-1"
 tenancy_ocid       = "ocid1.tenancy.oc1..aaaa..."
 budget_alert_email = "you@example.com"
+observability_user_email = "you+observability@example.com"   # service user for Loki/Tempo buckets
 
 # Optional:
 # ssh_source_cidr           = "1.2.3.4/32"   # your IP only (curl ifconfig.me)
