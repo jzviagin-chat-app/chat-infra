@@ -1,0 +1,114 @@
+# Grafana Alloy: the collector. One instance on the ops node reads every pod's
+# stdout logs through the Kubernetes API (no host mounts) and forwards
+# OpenTelemetry traces. At larger scale this becomes one agent per node.
+#   logs:   pods -> Alloy -> Loki
+#   traces: services -> alloy.observability.svc:4317/4318 -> Tempo
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: alloy
+  namespace: kube-system
+spec:
+  repo: https://grafana.github.io/helm-charts
+  chart: alloy
+  targetNamespace: observability
+  valuesContent: |-
+    controller:
+      type: deployment
+      replicas: 1
+      nodeSelector:
+        role: ops
+    alloy:
+      resources:
+        requests:
+          cpu: 20m
+          memory: 96Mi
+        limits:
+          memory: 256Mi
+      extraPorts:
+        - name: otlp-grpc
+          port: 4317
+          targetPort: 4317
+          protocol: TCP
+        - name: otlp-http
+          port: 4318
+          targetPort: 4318
+          protocol: TCP
+      configMap:
+        content: |
+          // ---------- Logs: every pod in the cluster -> Loki ----------
+          discovery.kubernetes "pods" {
+            role = "pod"
+          }
+
+          discovery.relabel "pods" {
+            targets = discovery.kubernetes.pods.targets
+            rule {
+              source_labels = ["__meta_kubernetes_namespace"]
+              target_label  = "namespace"
+            }
+            rule {
+              source_labels = ["__meta_kubernetes_pod_name"]
+              target_label  = "pod"
+            }
+            rule {
+              source_labels = ["__meta_kubernetes_pod_container_name"]
+              target_label  = "container"
+            }
+            rule {
+              source_labels = ["__meta_kubernetes_pod_label_app"]
+              target_label  = "app"
+            }
+            rule {
+              source_labels = ["__meta_kubernetes_pod_node_name"]
+              target_label  = "node"
+            }
+          }
+
+          loki.source.kubernetes "pods" {
+            targets    = discovery.relabel.pods.output
+            forward_to = [loki.process.pods.receiver]
+          }
+
+          // JSON log lines (our services): lift level and trace_id into labels
+          // so Grafana can filter by level and link to the trace.
+          loki.process "pods" {
+            stage.json {
+              expressions = { level = "level", trace_id = "trace_id" }
+            }
+            stage.labels {
+              values = { level = "" }
+            }
+            stage.structured_metadata {
+              values = { trace_id = "" }
+            }
+            forward_to = [loki.write.default.receiver]
+          }
+
+          loki.write "default" {
+            endpoint {
+              url = "http://loki.observability.svc:3100/loki/api/v1/push"
+            }
+          }
+
+          // ---------- Traces: OpenTelemetry in -> Tempo ----------
+          otelcol.receiver.otlp "default" {
+            grpc { endpoint = "0.0.0.0:4317" }
+            http { endpoint = "0.0.0.0:4318" }
+            output {
+              traces = [otelcol.processor.batch.default.input]
+            }
+          }
+
+          otelcol.processor.batch "default" {
+            output {
+              traces = [otelcol.exporter.otlp.tempo.input]
+            }
+          }
+
+          otelcol.exporter.otlp "tempo" {
+            client {
+              endpoint = "tempo.observability.svc:4317"
+              tls { insecure = true }
+            }
+          }

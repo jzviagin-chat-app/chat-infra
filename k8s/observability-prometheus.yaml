@@ -1,0 +1,50 @@
+# Prometheus: metrics database on the ops node (local disk, 7 days).
+# node-exporter runs on every node (CPU/memory/disk); kube-state-metrics
+# describes Kubernetes objects (pods, restarts, deployments).
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: prometheus
+  namespace: kube-system
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: prometheus
+  targetNamespace: observability
+  valuesContent: |-
+    server:
+      nodeSelector:
+        role: ops
+      retention: 7d
+      retentionSize: 6GB
+      global:
+        scrape_interval: 60s          # small cluster: once a minute is plenty
+        evaluation_interval: 60s
+      persistentVolume:
+        enabled: true
+        size: 8Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 384Mi
+        limits:
+          memory: 1Gi
+    alertmanager:
+      enabled: false                  # alerts come later, through Grafana
+    prometheus-pushgateway:
+      enabled: false
+    kube-state-metrics:
+      nodeSelector:
+        role: ops
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          memory: 192Mi
+    prometheus-node-exporter:
+      resources:
+        requests:
+          cpu: 20m
+          memory: 32Mi
+        limits:
+          memory: 96Mi

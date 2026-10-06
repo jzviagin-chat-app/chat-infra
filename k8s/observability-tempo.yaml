@@ -1,0 +1,52 @@
+# Tempo: trace database. Single binary on the ops node; blocks in the Oracle
+# bucket "chat-traces". Receives OpenTelemetry (OTLP) traces on 4317/4318.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: tempo
+  namespace: kube-system
+spec:
+  repo: https://grafana-community.github.io/helm-charts
+  chart: tempo
+  targetNamespace: observability
+  valuesContent: |-
+    tempo:
+      reportingEnabled: false
+      retention: 72h                  # keep traces 3 days
+      storage:
+        trace:
+          backend: s3
+          s3:
+            bucket: chat-traces
+            endpoint: axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com
+            region: il-jerusalem-1
+            access_key: ${AWS_ACCESS_KEY_ID}
+            secret_key: ${AWS_SECRET_ACCESS_KEY}
+            forcepathstyle: true
+            insecure: false
+          blocklist_poll: 15m         # fewer object-storage requests
+          wal:
+            path: /var/tempo/wal
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: "0.0.0.0:4317"
+            http:
+              endpoint: "0.0.0.0:4318"
+      extraArgs:
+        config.expand-env: true       # fills ${AWS_...} from the secret
+      extraEnvFrom:
+        - secretRef:
+            name: object-storage-credentials
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 768Mi
+    persistence:
+      enabled: true
+      size: 5Gi
+    nodeSelector:
+      role: ops

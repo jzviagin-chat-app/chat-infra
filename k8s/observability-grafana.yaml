@@ -1,0 +1,68 @@
+# Grafana: the UI. Loki, Tempo and Prometheus are pre-connected and linked:
+# a trace_id in a log line opens the trace; a trace opens its logs.
+# Not exposed publicly: open it through an SSH tunnel (docs/OBSERVABILITY.md).
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: grafana
+  namespace: kube-system
+spec:
+  repo: https://grafana-community.github.io/helm-charts
+  chart: grafana
+  targetNamespace: observability
+  valuesContent: |-
+    nodeSelector:
+      role: ops
+    admin:
+      existingSecret: grafana-admin   # sealed secret you create (see docs)
+      userKey: admin-user
+      passwordKey: admin-password
+    persistence:
+      enabled: true
+      size: 1Gi
+    testFramework:
+      enabled: false
+    grafana.ini:
+      analytics:
+        reporting_enabled: false
+        check_for_updates: false
+      users:
+        allow_sign_up: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 384Mi
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            uid: prometheus
+            type: prometheus
+            url: http://prometheus-server.observability.svc
+            isDefault: true
+          - name: Loki
+            uid: loki
+            type: loki
+            url: http://loki.observability.svc:3100
+            jsonData:
+              derivedFields:
+                - name: trace_id
+                  matcherType: label
+                  matcherRegex: trace_id
+                  datasourceUid: tempo
+                  url: "$${__value.raw}"
+          - name: Tempo
+            uid: tempo
+            type: tempo
+            url: http://tempo.observability.svc:3200
+            jsonData:
+              tracesToLogsV2:
+                datasourceUid: loki
+                filterByTraceID: true
+                spanStartTimeShift: "-5m"
+                spanEndTimeShift: "5m"
+              serviceMap:
+                datasourceUid: prometheus
