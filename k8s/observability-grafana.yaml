@@ -30,10 +30,10 @@ spec:
         allow_sign_up: false
     resources:
       requests:
-        cpu: 50m
-        memory: 128Mi
+        cpu: 100m
+        memory: 256Mi
       limits:
-        memory: 384Mi
+        memory: 1Gi
     datasources:
       datasources.yaml:
         apiVersion: 1
