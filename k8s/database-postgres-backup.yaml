@@ -1,0 +1,97 @@
+# Nightly Postgres backup: pg_dumpall (all databases + users) -> gzip -> bucket chat-backups.
+# The bucket deletes files older than 14 days by itself (terraform/backups.tf).
+#
+# Run one now:   kubectl -n database create job --from=cronjob/postgres-backup backup-manual-1
+# See result:    kubectl -n database logs job/backup-manual-1 -c upload
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: database
+spec:
+  schedule: "30 3 * * *"
+  timeZone: Asia/Jerusalem
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 604800 # keep finished jobs (and their logs) 7 days
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            role: ops
+          volumes:
+            - name: backup
+              emptyDir: {}
+          # 1) Dump into a shared scratch folder
+          initContainers:
+            - name: dump
+              image: postgres:17-alpine
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu -o pipefail
+                  f="/backup/postgres-$(date -u +%Y-%m-%dT%H%MZ).sql.gz"
+                  pg_dumpall --clean --if-exists | gzip -9 > "$f"
+                  gzip -t "$f"
+                  ls -l "$f"
+              env:
+                - name: PGHOST
+                  value: postgres.database.svc.cluster.local
+                - name: PGUSER
+                  value: postgres
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: POSTGRES_PASSWORD
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+          # 2) Upload it to the bucket
+          containers:
+            - name: upload
+              image: rclone/rclone:1.68.2
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  rclone copy /backup oci:chat-backups/postgres/ --s3-no-check-bucket -v
+                  echo "--- files in chat-backups/postgres/:"
+                  rclone ls oci:chat-backups/postgres/
+              env:
+                # rclone remote "oci" = Oracle Object Storage through its S3-compatible API
+                - name: RCLONE_CONFIG_OCI_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_OCI_PROVIDER
+                  value: Other
+                - name: RCLONE_CONFIG_OCI_ENDPOINT
+                  value: https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com
+                - name: RCLONE_CONFIG_OCI_REGION
+                  value: il-jerusalem-1
+                - name: RCLONE_CONFIG_OCI_FORCE_PATH_STYLE
+                  value: "true"
+              envFrom:
+                - secretRef:
+                    name: db-backups-s3 # RCLONE_CONFIG_OCI_ACCESS_KEY_ID / _SECRET_ACCESS_KEY
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
