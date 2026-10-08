@@ -87,7 +87,7 @@ One least-privilege IAM user per purpose; each can touch only its own buckets.
 |---|---|---|---|
 | `chat-logs` | Loki | `observability` | 14 days |
 | `chat-traces` | Tempo | `observability` | 7 days |
-| `chat-backups` *(phase 5)* | Postgres (and later Cassandra) backups | `db-backups` | 14 days |
+| `chat-backups` | Postgres (and later Cassandra) backups | `db-backups` | 14 days |
 
 S3 keys are stored in the cluster as SealedSecrets. Watch monthly **request counts** in the Oracle console
 (bucket → Metrics) during the first weeks. The current estimate is ~50k/month.
@@ -250,27 +250,32 @@ Rules:
 | 2 | Sealed Secrets (offline `kubeseal` with `pub-cert.pem`) | ✅ done |
 | 3 | `ops` node | ✅ done |
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
-| **5** | **Postgres for auth + nightly backups** | 🔨 in progress |
-| 6 | Cassandra for chat | ⏳ next |
+| 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
+| **6** | **Cassandra for chat** | ⏳ next |
 | 7 | Production auth-service | ⏳ |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
 
-### Phase 5: Postgres for auth + backups
+### Phase 5: Postgres for auth + backups ✅
+How to use it: `docs/DATABASE.md`.
 1. Terraform `backups.tf`:
    - bucket `chat-backups` (14-day lifecycle),
    - IAM group, user and policy `db-backups` (this bucket only),
    - S3 key outputs `backups_access_key_id` / `backups_secret_access_key`.
 
    New variables: `backups_user_email` and `backups_max_days`.
-2. Namespace `database`, with a Postgres StatefulSet pinned to `ops` (local-path volume, ~512 MB memory).
+2. Namespace `database`, with a Postgres 17 StatefulSet pinned to `ops` (local-path volume 5Gi, 768 MB memory limit).
 3. SealedSecrets:
    - `postgres-credentials` (superuser),
    - `auth-db` (DB `auth`, user `auth`, connection URL for auth-service),
    - `db-backups-s3` (bucket key).
 4. NetworkPolicy: only auth-service pods and the backup job can reach Postgres on port 5432.
-5. Nightly CronJob: `pg_dump` (compressed) → `rclone` → `chat-backups`. Document a **restore drill** and actually run it once.
+5. Nightly CronJob (03:30 Asia/Jerusalem): `pg_dumpall` | gzip → `rclone` → `chat-backups/postgres/`.
+   Restore drill `manual/postgres-restore-test.yaml` (run by hand; `manual/` is not watched by Argo CD).
+   It passed on 2026-10-08.
+   - Lesson: k3s's network-policy firewall blocks a brand-new pod for a few seconds. Anything that connects at
+     startup must retry (the backup job waits up to 60 s; auth-service must too).
 6. Docs: `docs/DATABASE.md` (connect, backup, restore).
 
 ### Phase 6: Cassandra for chat
@@ -281,7 +286,7 @@ Rules:
 5. Docs: `docs/CASSANDRA.md`.
 
 ### Phase 7: Production auth-service
-- Schema migrations with Alembic.
+- Schema migrations with Alembic. DB connection retries at startup (see the phase 5 lesson).
 - Endpoints: `request-otp`, `verify-otp`, `refresh`, `logout`, device registration, `jwks`.
 - Fake SMS sender in dev; the Twilio adapter is behind a flag and isn't switched on until the guards from section 6 are in place.
 - Rate limits, JSON logs, OTel traces, metrics, unit tests.
@@ -320,3 +325,4 @@ Rules:
 | Date | Change |
 |---|---|
 | 2026-10-08 | First version of this plan. Decided: Postgres for auth only; Cassandra for all chat data including server-side history. Phase 5 rescoped to auth DB + backups; new phase 6 for Cassandra. |
+| 2026-10-08 | Phase 5 done: Postgres on ops, NetworkPolicy, nightly `pg_dumpall` backup to `chat-backups`, restore drill passed. Added `docs/DATABASE.md` and the `manual/` folder for hand-run jobs. |
