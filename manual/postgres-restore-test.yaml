@@ -1,0 +1,90 @@
+# Restore drill: proves the newest backup in chat-backups can actually be loaded.
+# Downloads it, loads it into a TEMPORARY empty Postgres inside this pod, and checks
+# the auth database and user. The real Postgres is never touched.
+#
+# NOT in k8s/, so Argo CD does not run it. Start it by hand (lb VM):
+#   kubectl create -f https://raw.githubusercontent.com/jzviagin-chat-app/chat-infra/main/manual/postgres-restore-test.yaml
+#   kubectl -n database logs -f postgres-restore-test -c restore
+#   kubectl -n database delete pod postgres-restore-test
+apiVersion: v1
+kind: Pod
+metadata:
+  name: postgres-restore-test
+  namespace: database
+  labels:
+    app: postgres-restore-test
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    role: ops
+  securityContext:
+    runAsUser: 70 # the postgres user in the alpine image (initdb refuses to run as root)
+    runAsGroup: 70
+    fsGroup: 70
+  volumes:
+    - name: restore
+      emptyDir: {}
+  # 1) Download the newest backup
+  initContainers:
+    - name: download
+      image: rclone/rclone:1.68.2
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          f=$(rclone lsf oci:chat-backups/postgres/ | sort | tail -1)
+          [ -n "$f" ] || { echo "no backups found" >&2; exit 1; }
+          echo "newest backup: $f"
+          rclone copy "oci:chat-backups/postgres/$f" /restore/
+          ls -l /restore
+      env:
+        - name: HOME
+          value: /tmp
+        - name: RCLONE_CONFIG_OCI_TYPE
+          value: s3
+        - name: RCLONE_CONFIG_OCI_PROVIDER
+          value: Other
+        - name: RCLONE_CONFIG_OCI_ENDPOINT
+          value: https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com
+        - name: RCLONE_CONFIG_OCI_REGION
+          value: il-jerusalem-1
+        - name: RCLONE_CONFIG_OCI_FORCE_PATH_STYLE
+          value: "true"
+      envFrom:
+        - secretRef:
+            name: db-backups-s3
+      volumeMounts:
+        - name: restore
+          mountPath: /restore
+  # 2) Load it into a temporary Postgres and check it
+  containers:
+    - name: restore
+      image: postgres:17-alpine
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu -o pipefail
+          export PGDATA=/tmp/pgdata PGHOST=/tmp PGUSER=postgres
+          initdb -U postgres -A trust >/dev/null
+          pg_ctl -o "-c listen_addresses='' -k /tmp" -l /tmp/pg.log -w start >/dev/null
+          echo "loading $(ls /restore)..."
+          gunzip -c /restore/*.sql.gz | psql -q -d postgres >/dev/null 2>/tmp/restore.err || true
+          echo "--- unexpected messages (empty is good):"
+          # expected on an empty server: dropping/creating the built-in postgres user, "skipping" notices
+          grep -v -e 'cannot be dropped' -e 'role "postgres" already exists' -e 'does not exist, skipping' /tmp/restore.err || true
+          echo "--- databases:"
+          psql -d postgres -Atc "select datname from pg_database where not datistemplate order by 1"
+          echo "--- login users:"
+          psql -d postgres -Atc "select rolname from pg_roles where rolcanlogin order by 1"
+          psql -d auth -Atc "select 'connected to ' || current_database()" >/dev/null
+          psql -d postgres -Atc "select 1 from pg_roles where rolname = 'auth'" | grep -q 1
+          echo "RESTORE TEST OK"
+      volumeMounts:
+        - name: restore
+          mountPath: /restore
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 384Mi
