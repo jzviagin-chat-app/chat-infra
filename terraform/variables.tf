@@ -102,3 +102,14 @@ variable "gitops_repo_url" {
   type        = string
   default     = "https://github.com/jzviagin-chat-app/chat-infra.git"
 }
+
+variable "backups_user_email" {
+  description = "Email for the 'db-backups' service user (Oracle requires one). A plus-address like you+backups@gmail.com works."
+  type        = string
+}
+
+variable "backups_max_days" {
+  description = "Backup files older than this are deleted by the bucket itself"
+  type        = number
+  default     = 14
+}

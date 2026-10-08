@@ -7,3 +7,4 @@ observability_user_email = "you+observability@example.com"   # service user for 
 # Optional:
 # ssh_source_cidr           = "1.2.3.4/32"   # your IP only (curl ifconfig.me)
 # availability_domain_index = 1             # if you hit "Out of host capacity"
+backups_user_email = "you+backups@example.com"   # service user for the chat-backups bucket
