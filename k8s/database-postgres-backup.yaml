@@ -37,6 +37,14 @@ spec:
               args:
                 - |
                   set -eu -o pipefail
+                  # k3s's network-policy firewall needs a few seconds to admit a brand-new pod:
+                  # wait (up to ~60 s) until Postgres answers before dumping.
+                  i=0
+                  until pg_isready -t 2 >/dev/null; do
+                    i=$((i + 1))
+                    if [ "$i" -ge 30 ]; then echo "Postgres not reachable after 60 s" >&2; exit 1; fi
+                    sleep 2
+                  done
                   f="/backup/postgres-$(date -u +%Y-%m-%dT%H%MZ).sql.gz"
                   pg_dumpall --clean --if-exists | gzip -9 > "$f"
                   gzip -t "$f"
