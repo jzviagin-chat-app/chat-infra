@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: auth-db
+  namespace: default
+spec:
+  encryptedData:
+    DATABASE_URL: AgCjI+BrCusjcmImyV/HGGM2yIfKEYvTIUVbbA4iKEkKTcEZ0CJDVLQBGxDpQc04SwP19wVlogdkKrzlLolMoOKQbCAtpQ6o7vLSR5UPLTMPF3VHgsFqJolr+2TVgyjDcXyfexyvazE73YVZYUIEbXgIWzEiQhLu0MVhcagNIYefct3PzmHhtm/U02nhPVLDanJmnS65wG0aW76duHB5KCAvQwrFNeo28/f98M/AgdU2oq1c480SAaZrtpPP3pEcZ4b057cIEPtSFzx6Ryps7LQJLja8cmwIc47e2L9w/iLgRcWuwKaoB+3W1zxhg0COx2oJsii3cP18k4cBf2Cw0Wt2lRuymvH9iWaY6J+EYtfgB6zkrF9Jh6uPZ2AjktqLR1FYm5wEF7aNc0Bp44j+UZi9CEvm8kfr6oTmhRXMQCwWz6dHibj8T4tAXt3Oh+1147p5GTSKLAcKz6Q3gN+71Af9Il4KvkM2BxPT5r8WvTFlsyzrDRe9tN9a7zoKoD1asu4cHanb8HaSAf+2W78JtS3Vtl/o5qP1V7v0p8dP9JGO7ZCeFCbkvpn9UdOYSX4+GL5KgXwqGkXUEBFGtlWUsZ47aXW/gmxl2KREXCwb12Io8FWE5O4kaArGVVLZ0kptbGWcZpBR+9entjgzZc3HC4v0et/VtSvCRCqIh+QWOE9JQ7xPgYh0gyeWq7juBEMy9foF0xXeBG64hhnk8o3wFgCj4xaw1tRzffxj6ZRFhELTFX48CnuRxKFtry4WXOWE+pEiuOUGHKjR54tvFG8VOpLfCgavaG8DG64REhrMn0Y2eNj2y6skiblBjLtoYhvi/GnJoQ5xAzstlypPxGa4kA1C
+  template:
+    metadata:
+      name: auth-db
+      namespace: default

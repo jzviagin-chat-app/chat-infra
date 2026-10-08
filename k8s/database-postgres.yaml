@@ -1,0 +1,140 @@
+# Postgres for auth-service. Single instance on the ops node, data on the node's disk
+# (k3s local-path). Nightly dumps to the chat-backups bucket are the safety net.
+#
+# Address inside the cluster: postgres.database.svc.cluster.local:5432
+# Passwords come from the SealedSecret "postgres-credentials" (database-postgres-credentials-sealed.yaml).
+
+# Runs ONCE, on the very first start (empty data folder): creates the "auth" user and database.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: database
+data:
+  01-auth-db.sh: |
+    #!/bin/sh
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -v pw="$AUTH_DB_PASSWORD" <<'EOSQL'
+    CREATE ROLE auth LOGIN PASSWORD :'pw';
+    CREATE DATABASE auth OWNER auth;
+    REVOKE ALL ON DATABASE auth FROM PUBLIC;
+    EOSQL
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: database
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      nodeSelector:
+        role: ops
+      terminationGracePeriodSeconds: 60 # let Postgres shut down cleanly
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          args:
+            - -c
+            - shared_buffers=128MB
+            - -c
+            - max_connections=50
+            - -c
+            - log_min_duration_statement=500 # log queries slower than 0.5 s
+            - -c
+            - log_connections=on
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: AUTH_DB_PASSWORD # only used by the init script
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: AUTH_DB_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: database
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+# Only auth-service pods (namespace default) and pods inside the database namespace
+# (the backup job) may connect. Everything else is dropped.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-allow-auth-only
+  namespace: database
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:
+              app: auth
+        - podSelector: {} # same namespace: the backup job
+      ports:
+        - port: 5432

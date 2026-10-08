@@ -1,0 +1,5 @@
+# Databases live in their own namespace, so a NetworkPolicy can fence them off.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: database
