@@ -1,0 +1,120 @@
+# Restore drill: proves the newest Cassandra backup in chat-backups can actually be loaded.
+# Downloads it, starts a TEMPORARY empty Cassandra inside this pod (on a worker node),
+# recreates the tables from the backup, loads the data files and checks them.
+# The real Cassandra is never touched.
+#
+# Checks: all 7 chat tables exist, and the test row
+#   conversation_members conv_id=00000000-0000-0000-0000-000000000001 role='restore-test'
+# is present (insert it before the backup; see docs/CASSANDRA.md).
+#
+# NOT in k8s/, so Argo CD does not run it. Start it by hand (lb VM):
+#   kubectl -n chat-db delete pod cassandra-restore-test --ignore-not-found
+#   kubectl create -f https://raw.githubusercontent.com/jzviagin-chat-app/chat-infra/main/manual/cassandra-restore-test.yaml
+#   kubectl -n chat-db logs -f cassandra-restore-test -c restore
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cassandra-restore-test
+  namespace: chat-db
+  labels:
+    app: cassandra-restore-test
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    role: worker # plenty of free memory there; keeps the load off the ops node
+  volumes:
+    - name: restore
+      emptyDir: {}
+  # 1) Download the newest backup
+  initContainers:
+    - name: download
+      image: rclone/rclone:1.68.2
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          f=$(rclone lsf oci:chat-backups/cassandra/ | sort | tail -1)
+          [ -n "$f" ] || { echo "no backups found" >&2; exit 1; }
+          echo "newest backup: $f"
+          rclone copy "oci:chat-backups/cassandra/$f" /restore/
+          ls -l /restore
+      env:
+        - name: HOME
+          value: /tmp
+        - name: RCLONE_CONFIG_OCI_TYPE
+          value: s3
+        - name: RCLONE_CONFIG_OCI_PROVIDER
+          value: Other
+        - name: RCLONE_CONFIG_OCI_ENDPOINT
+          value: https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com
+        - name: RCLONE_CONFIG_OCI_REGION
+          value: il-jerusalem-1
+        - name: RCLONE_CONFIG_OCI_FORCE_PATH_STYLE
+          value: "true"
+      envFrom:
+        - secretRef:
+            name: db-backups-s3
+      volumeMounts:
+        - name: restore
+          mountPath: /restore
+  # 2) Temporary Cassandra: load the backup and check it
+  containers:
+    - name: restore
+      image: cassandra:5.0.9
+      command: ["bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          cd /restore
+          tar xzf cassandra-chat-*.tar.gz
+          echo "starting a temporary Cassandra (1-3 minutes)..."
+          docker-entrypoint.sh cassandra -f > /tmp/cassandra.log 2>&1 &
+          for i in $(seq 1 60); do
+            cqlsh -e "SELECT now() FROM system.local" >/dev/null 2>&1 && break
+            [ "$i" -lt 60 ] || { echo "temporary Cassandra did not start" >&2; tail -30 /tmp/cassandra.log; exit 1; }
+            sleep 5
+          done
+
+          cqlsh -e "CREATE KEYSPACE chat WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}"
+          for dir in chat/*/snapshots/*/; do
+            table=$(basename "$(dirname "$(dirname "$dir")")"); table=${table%-*}
+            cqlsh -f "$dir/schema.cql"
+            if ls "$dir"/*-Data.db >/dev/null 2>&1; then
+              chown -R cassandra:cassandra "$dir"
+              env -u MAX_HEAP_SIZE nodetool import chat "$table" "$dir" >/dev/null   # nodetool: small own heap
+              echo "  $table: table + data loaded"
+            else
+              echo "  $table: table loaded (it was empty)"
+            fi
+          done
+
+          echo "--- tables:"
+          tables=$(cqlsh -e "SELECT table_name FROM system_schema.tables WHERE keyspace_name = 'chat'" \
+            | sed -n 's/^(\([0-9]*\) rows)$/\1/p')
+          echo "  ${tables:-0} tables in keyspace chat (expected 7)"
+          echo "--- test row:"
+          cqlsh -e "SELECT conv_id, user_id, role FROM chat.conversation_members WHERE conv_id = 00000000-0000-0000-0000-000000000001"
+          [ "${tables:-0}" -eq 7 ] || { echo "RESTORE TEST FAILED: wrong number of tables" >&2; exit 1; }
+          cqlsh -e "SELECT role FROM chat.conversation_members WHERE conv_id = 00000000-0000-0000-0000-000000000001" \
+            | grep -q restore-test || { echo "RESTORE TEST FAILED: test row missing" >&2; exit 1; }
+          echo "RESTORE TEST OK"
+      env:
+        - name: HOME
+          value: /tmp
+        - name: CASSANDRA_CLUSTER_NAME
+          value: restore-test
+        - name: CASSANDRA_ENDPOINT_SNITCH
+          value: GossipingPropertyFileSnitch # datacenter "dc1", same as the real one
+        - name: MAX_HEAP_SIZE
+          value: 512M
+        - name: MAX_DIRECT_MEMORY_SIZE
+          value: 256M
+      volumeMounts:
+        - name: restore
+          mountPath: /restore
+      resources:
+        requests:
+          cpu: 200m
+          memory: 1Gi
+        limits:
+          memory: 1536Mi
