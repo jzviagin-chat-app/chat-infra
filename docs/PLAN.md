@@ -108,6 +108,8 @@ The `ops` node runs Loki, Tempo, Prometheus, Grafana (1 GiB limit), Alloy, Postg
 - Cassandra target: ~1.5 GB heap (~2.5 GB container).
 - Postgres target: ~512 MB.
 
+Measured on 2026-10-09 with everything running (including Cassandra): `ops` at ~60% (3.5 GB of 5.8 GB).
+
 Before each new database is added, check with `kubectl top node ops`. If it's too tight:
 - lower the Cassandra heap to 1 GB, or
 - reduce Prometheus retention.
@@ -172,7 +174,10 @@ and vacuum pressure, and scaling writes means manual sharding. Cassandra handles
 
 Each service owns its own database. No service reads another service's DB.
 
-### 5.1 Chat data model (draft, to be finalised in the Cassandra phase)
+### 5.1 Chat data model
+The final tables are in `manual/cassandra-schema.yaml` and described in `docs/CASSANDRA.md`. On top of the
+sketch below they add `device_inbox_seq` and `conversation_seq` (number counters) and `devices_by_user`
+(chat-service's own list of each user's devices, so it never reads auth's database).
 ```sql
 -- Per-device inbox: append + cursor + bulk expiry
 CREATE TABLE inbox_by_device (
@@ -210,10 +215,15 @@ CREATE TABLE messages_by_conversation (
 Rules:
 - **All writes are idempotent.** Retrying with the same key overwrites with the same value.
 - The ack cursor lives on the device. Inbox rows simply expire; nothing deletes them one by one.
-- **Open question: allocating a gap-free `inbox_seq`/`seq` in Cassandra.**
-  - Option A: a lightweight transaction (LWT) on a per-device counter row. Simple and correct, but slower.
-  - Option B: a single writer per device/conversation (owner chosen through Redis) that allocates in memory and recovers from the DB.
-  - Decide and prototype at the start of phase 6.
+- **Decided (phase 6): numbers come from lightweight transactions (LWT)** on a per-device / per-conversation
+  counter row: "set from N to N+1 only if it is still N, else retry".
+  - Benchmark on this cluster: 287 numbers/s with 20 writers on 20 devices (median 66 ms); 43/s with 20 writers
+    on one device; 0 duplicates, 0 gaps.
+  - If the one-busy-device case ever matters: queue each device's numbering inside a chat-service process.
+    Fallback: option B, a single owner per device that allocates in memory (same tables).
+  - **Reader rule:** a number can be handed out slightly before its message is written. So a device advances its
+    cursor only over numbers with nothing missing below. If a hole stays for longer than a few seconds, skip it:
+    its writer died, and the sender (not yet acked ✓) resends with the same `msg_id`.
 - Optional later: archive old history months to object storage.
 - Under E2E the server stores only ciphertext. Restoring history on a new device needs a key-backup
   design (later).
@@ -251,8 +261,8 @@ Rules:
 | 3 | `ops` node | ✅ done |
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
-| **6** | **Cassandra for chat** | ⏳ next |
-| 7 | Production auth-service | ⏳ |
+| 6 | Cassandra for chat | ✅ done (restore drill passed) |
+| **7** | **Production auth-service** | ⏳ next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -278,12 +288,18 @@ How to use it: `docs/DATABASE.md`.
      startup must retry (the backup job waits up to 60 s; auth-service must too).
 6. Docs: `docs/DATABASE.md` (connect, backup, restore).
 
-### Phase 6: Cassandra for chat
-1. Single Cassandra node on `ops` (namespace `chat-db`), ~1.5 GB heap, replication factor 1 for now.
-2. Authentication on, with the password as a SealedSecret. NetworkPolicy so only chat-service can connect.
-3. Keyspace + tables from section 5.1. Prototype and decide how sequences are allocated.
-4. Backups: `nodetool snapshot` → `rclone` → `chat-backups`, plus a restore drill.
-5. Docs: `docs/CASSANDRA.md`.
+### Phase 6: Cassandra for chat ✅
+How to use it: `docs/CASSANDRA.md`.
+1. Cassandra 5.0.9 on `ops` (namespace `chat-db`), 1.5 GB heap, datacenter `dc1`, replication 1 for now.
+2. Password login on. Users:
+   - `admin` (superuser);
+   - `chat_app` (read/write on `chat` only).
+
+   The built-in `cassandra` user is disabled. A NetworkPolicy lets in only chat pods and `chat-db` pods.
+3. 7 tables (`manual/cassandra-schema.yaml`). Numbering decided: LWT (section 5.1, with benchmark).
+4. Backups: a sidecar in the Cassandra pod. At 00:45 UTC it runs `nodetool snapshot` → tar.gz → `chat-backups/cassandra/`.
+   - Lesson: rclone copied into another image needs the CA certificate list too (`SSL_CERT_FILE`).
+5. Restore drill (`manual/cassandra-restore-test.yaml`): restores into a temporary Cassandra on a worker and checks a test row.
 
 ### Phase 7: Production auth-service
 - Schema migrations with Alembic. DB connection retries at startup (see the phase 5 lesson).
@@ -299,6 +315,9 @@ How to use it: `docs/DATABASE.md`.
 - JWT validation through JWKS.
 - WebSocket session, the Redis registry and heartbeat, `inst:<POD_NAME>` subscription.
 - Inbox writes, acks, notify + pull with coalescing, typing/online events, history reads.
+- Message numbers via LWT; the device's cursor only advances over numbers with nothing missing below (section 5.1).
+- Fill `devices_by_user` when a device connects with a valid token. Retry the first Cassandra connection
+  (new pods are blocked for a few seconds).
 - Client side: SQLite store, cursor, cumulative acks.
 
 ---
@@ -326,3 +345,4 @@ How to use it: `docs/DATABASE.md`.
 |---|---|
 | 2026-10-08 | First version of this plan. Decided: Postgres for auth only; Cassandra for all chat data including server-side history. Phase 5 rescoped to auth DB + backups; new phase 6 for Cassandra. |
 | 2026-10-08 | Phase 5 done: Postgres on ops, NetworkPolicy, nightly `pg_dumpall` backup to `chat-backups`, restore drill passed. Added `docs/DATABASE.md` and the `manual/` folder for hand-run jobs. |
+| 2026-10-09 | Phase 6 done: Cassandra 5.0.9 on ops, users + NetworkPolicy, 7 chat tables, numbering decided (LWT, benchmarked), nightly snapshot backup sidecar, restore drill passed. Added `docs/CASSANDRA.md`. |
