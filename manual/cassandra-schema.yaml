@@ -1,0 +1,141 @@
+# Chat tables in keyspace "chat". Safe to run again: every statement is IF NOT EXISTS.
+# Later changes: ADD new statements at the end (ALTER TABLE ... / CREATE TABLE IF NOT EXISTS ...),
+# never edit or remove old ones.
+#
+# NOT in k8s/, so Argo CD does not run it. Start it by hand (lb VM):
+#   kubectl -n chat-db delete pod cassandra-schema --ignore-not-found
+#   kubectl create -f https://raw.githubusercontent.com/jzviagin-chat-app/chat-infra/main/manual/cassandra-schema.yaml
+#   kubectl -n chat-db logs -f cassandra-schema
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-schema
+  namespace: chat-db
+data:
+  schema.cql: |
+    -- Per-device inbox: append, the device reads after its cursor, rows expire on their own.
+    -- TimeWindowCompaction + TTL drops whole expired files: no tombstone pile-up.
+    CREATE TABLE IF NOT EXISTS chat.inbox_by_device (
+      device_id        uuid,
+      inbox_seq        bigint,
+      msg_id           uuid,
+      conv_id          uuid,
+      sender_user_id   uuid,
+      sender_device_id uuid,
+      payload          blob,       -- ciphertext once E2E exists
+      created_at       timestamp,
+      PRIMARY KEY ((device_id), inbox_seq)
+    ) WITH default_time_to_live = 2592000           -- 30 days for devices that stay offline
+      AND gc_grace_seconds = 10800                  -- single node, no repairs: short grace is safe
+      AND compaction = {'class': 'TimeWindowCompactionStrategy',
+                        'compaction_window_unit': 'DAYS', 'compaction_window_size': 1};
+
+    -- Last inbox number handed out per device (advanced with lightweight transactions).
+    CREATE TABLE IF NOT EXISTS chat.device_inbox_seq (
+      device_id uuid PRIMARY KEY,
+      last_seq  bigint
+    );
+
+    -- Full history, one partition per conversation per month, newest first.
+    CREATE TABLE IF NOT EXISTS chat.messages_by_conversation (
+      conv_id          uuid,
+      month_bucket     int,        -- e.g. 202610
+      seq              bigint,
+      msg_id           uuid,
+      sender_user_id   uuid,
+      sender_device_id uuid,
+      payload          blob,
+      created_at       timestamp,
+      PRIMARY KEY ((conv_id, month_bucket), seq)
+    ) WITH CLUSTERING ORDER BY (seq DESC);
+
+    -- Last history number handed out per conversation.
+    CREATE TABLE IF NOT EXISTS chat.conversation_seq (
+      conv_id  uuid PRIMARY KEY,
+      last_seq bigint
+    );
+
+    -- Chat list: "my conversations".
+    CREATE TABLE IF NOT EXISTS chat.user_conversations (
+      user_id   uuid,
+      conv_id   uuid,
+      kind      text,              -- 'direct' or 'group'
+      title     text,
+      joined_at timestamp,
+      PRIMARY KEY ((user_id), conv_id)
+    );
+
+    -- Members of a conversation (used to find recipients).
+    CREATE TABLE IF NOT EXISTS chat.conversation_members (
+      conv_id   uuid,
+      user_id   uuid,
+      role      text,              -- 'member' or 'admin'
+      joined_at timestamp,
+      PRIMARY KEY ((conv_id), user_id)
+    );
+
+    -- Devices to deliver to. Filled by chat-service when a device connects with a valid token,
+    -- so chat-service never reads auth's database.
+    CREATE TABLE IF NOT EXISTS chat.devices_by_user (
+      user_id       uuid,
+      device_id     uuid,
+      registered_at timestamp,
+      last_seen_at  timestamp,
+      PRIMARY KEY ((user_id), device_id)
+    );
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cassandra-schema
+  namespace: chat-db
+  labels:
+    app: cassandra-schema
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    role: ops # the Cassandra image is already on this node
+  volumes:
+    - name: schema
+      configMap:
+        name: cassandra-schema
+  containers:
+    - name: schema
+      image: cassandra:5.0.9
+      command: ["bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          H=cassandra.chat-db.svc.cluster.local
+          cq() {
+            cqlsh "$H" 9042 -u admin -p "$ADMIN_PASSWORD" --request-timeout=60 "$@" \
+              2> >(grep -v -e 'Using a password on the command line' -e 'use the credentials file' -e '^$' >&2)
+          }
+          echo "waiting for Cassandra..."
+          for i in $(seq 1 60); do
+            cq -e "SELECT release_version FROM system.local" >/dev/null 2>&1 && break
+            [ "$i" -lt 60 ] || { echo "Cassandra not reachable after 5 minutes" >&2; exit 1; }
+            sleep 5
+          done
+          echo "applying schema"
+          cq -f /schema/schema.cql
+          echo "--- tables in keyspace chat:"
+          cq -e "SELECT table_name FROM system_schema.tables WHERE keyspace_name = 'chat'"
+          echo "SCHEMA OK"
+      env:
+        - name: HOME
+          value: /tmp
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cassandra-credentials
+              key: ADMIN_PASSWORD
+      volumeMounts:
+        - name: schema
+          mountPath: /schema
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 384Mi

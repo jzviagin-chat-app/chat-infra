@@ -1,0 +1,159 @@
+# Measures handing out message numbers with lightweight transactions (LWT), the way
+# chat-service will: "set the counter from N to N+1 only if it is still N, else retry".
+# Uses a scratch table (chat.bench_seq) that is dropped at the end; real tables are not touched.
+#
+# NOT in k8s/, so Argo CD does not run it. Start it by hand (lb VM):
+#   kubectl -n chat-db delete pod cassandra-seq-bench --ignore-not-found
+#   kubectl apply -f https://raw.githubusercontent.com/jzviagin-chat-app/chat-infra/main/manual/cassandra-seq-bench.yaml
+#   kubectl -n chat-db logs -f cassandra-seq-bench
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-seq-bench
+  namespace: chat-db
+data:
+  bench.py: |
+    import os, statistics, threading, time, uuid
+    from cassandra import ConsistencyLevel, WriteTimeout, ReadTimeout
+    from cassandra.auth import PlainTextAuthProvider
+    from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT
+    from cassandra.policies import RoundRobinPolicy
+
+    HOST = os.environ.get("CASSANDRA_HOST", "cassandra.chat-db.svc.cluster.local")
+    THREADS = 20
+
+    profile = ExecutionProfile(
+        load_balancing_policy=RoundRobinPolicy(),
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        request_timeout=20,
+    )
+    cluster = Cluster([HOST], port=9042, protocol_version=5,
+                      auth_provider=PlainTextAuthProvider("admin", os.environ["ADMIN_PASSWORD"]),
+                      execution_profiles={EXEC_PROFILE_DEFAULT: profile})
+
+    # Brand-new pods are blocked by the network policy for a few seconds: retry.
+    for attempt in range(30):
+        try:
+            session = cluster.connect()
+            break
+        except Exception as e:
+            if attempt == 29:
+                raise
+            print("waiting for Cassandra...", type(e).__name__, flush=True)
+            time.sleep(2)
+
+    session.execute("CREATE TABLE IF NOT EXISTS chat.bench_seq (device_id uuid PRIMARY KEY, last_seq bigint)")
+    sel = session.prepare("SELECT last_seq FROM chat.bench_seq WHERE device_id = ?")
+    sel.consistency_level = ConsistencyLevel.LOCAL_SERIAL     # read the latest LWT result
+    ins = session.prepare("INSERT INTO chat.bench_seq (device_id, last_seq) VALUES (?, 1) IF NOT EXISTS")
+    upd = session.prepare("UPDATE chat.bench_seq SET last_seq = ? WHERE device_id = ? IF last_seq = ?")
+
+    def allocate(dev, stats):
+        """Next number for this device. Returns (number, retries)."""
+        retries = 0
+        row = session.execute(sel, [dev]).one()
+        cur = row.last_seq if row else None
+        while True:
+            try:
+                if cur is None:
+                    rs = session.execute(ins, [dev])
+                    if rs.was_applied:
+                        return 1, retries
+                else:
+                    rs = session.execute(upd, [cur + 1, dev, cur])
+                    if rs.was_applied:
+                        return cur + 1, retries
+                cur = rs.one().last_seq     # lost the race: the reply carries the current value
+            except (WriteTimeout, ReadTimeout):
+                # Outcome unknown (the number may or may not have been taken): re-read and retry.
+                stats["timeouts"] += 1
+                row = session.execute(sel, [dev]).one()
+                cur = row.last_seq if row else None
+            retries += 1
+
+    def run_case(name, device_for_thread, per_thread):
+        got = {}                     # device -> numbers handed out
+        lat, lock = [], threading.Lock()
+        stats = {"retries": 0, "timeouts": 0}
+
+        def worker(t):
+            dev = device_for_thread(t)
+            for _ in range(per_thread):
+                t0 = time.perf_counter()
+                n, r = allocate(dev, stats)
+                ms = (time.perf_counter() - t0) * 1000
+                with lock:
+                    got.setdefault(dev, []).append(n)
+                    lat.append(ms)
+                    stats["retries"] += r
+
+        start = time.perf_counter()
+        ts = [threading.Thread(target=worker, args=(t,)) for t in range(THREADS)]
+        for t in ts: t.start()
+        for t in ts: t.join()
+        secs = time.perf_counter() - start
+
+        dupes = sum(len(v) - len(set(v)) for v in got.values())
+        gaps = sum(max(v) - len(set(v)) for v in got.values())
+        lat.sort()
+        total = len(lat)
+        print(f"\n=== {name}")
+        print(f"  {total} numbers in {secs:.1f} s  ->  {total / secs:.0f} numbers/second")
+        print(f"  latency ms: median {statistics.median(lat):.0f}, p99 {lat[int(total * 0.99) - 1]:.0f}, max {lat[-1]:.0f}")
+        print(f"  lost races (retries): {stats['retries']}, timeouts: {stats['timeouts']}")
+        print(f"  duplicates: {dupes}  (must be 0)")
+        print(f"  gaps: {gaps}  (only possible after timeouts)")
+        return dupes == 0
+
+    ok = True
+    hot = uuid.uuid4()
+    ok &= run_case(f"WORST CASE: {THREADS} writers, 1 device", lambda t: hot, per_thread=15)
+    devs = [uuid.uuid4() for _ in range(THREADS)]
+    ok &= run_case(f"NORMAL CASE: {THREADS} writers, {THREADS} devices", lambda t: devs[t], per_thread=50)
+
+    session.execute("DROP TABLE chat.bench_seq")
+    cluster.shutdown()
+    print("\nBENCH OK" if ok else "\nBENCH FAILED: duplicate numbers")
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cassandra-seq-bench
+  namespace: chat-db
+  labels:
+    app: cassandra-seq-bench
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    role: worker # run the client on another VM, like chat-service will
+  volumes:
+    - name: bench
+      configMap:
+        name: cassandra-seq-bench
+  containers:
+    - name: bench
+      image: python:3.11-slim
+      command: ["bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          echo "installing the Cassandra driver..."
+          CASS_DRIVER_NO_EXTENSIONS=1 pip install --quiet --no-cache-dir --disable-pip-version-check \
+            cassandra-driver==3.29.2 2>&1 | grep -v "Running pip as the 'root' user" || true
+          python -u /bench/bench.py
+      env:
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cassandra-credentials
+              key: ADMIN_PASSWORD
+      volumeMounts:
+        - name: bench
+          mountPath: /bench
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
