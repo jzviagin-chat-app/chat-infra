@@ -1,0 +1,121 @@
+# Cassandra for chat data (inboxes, chat lists, members, message history).
+# Single node on the ops node for now; more nodes can join later without changing the design.
+#
+# Address inside the cluster: cassandra.chat-db.svc.cluster.local:9042
+# Users (created once by manual/cassandra-setup.yaml):
+#   admin     superuser, for setup and admin work only
+#   chat_app  read/write on keyspace "chat" only; used by chat-service
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cassandra
+  namespace: chat-db
+spec:
+  serviceName: cassandra
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cassandra
+  template:
+    metadata:
+      labels:
+        app: cassandra
+    spec:
+      nodeSelector:
+        role: ops
+      terminationGracePeriodSeconds: 120 # let Cassandra flush and stop cleanly
+      containers:
+        - name: cassandra
+          image: cassandra:5.0.9
+          # Turn on password login, then start Cassandra the normal way.
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              sed -i \
+                -e 's/^authenticator:.*/authenticator: PasswordAuthenticator/' \
+                -e 's/^authorizer:.*/authorizer: CassandraAuthorizer/' \
+                "$CASSANDRA_CONF/cassandra.yaml"
+              exec docker-entrypoint.sh cassandra -f
+          env:
+            - name: CASSANDRA_CLUSTER_NAME
+              value: chat # can never change after the first start
+            - name: CASSANDRA_ENDPOINT_SNITCH
+              value: GossipingPropertyFileSnitch # datacenter "dc1", ready for more nodes later
+            - name: MAX_HEAP_SIZE
+              value: 1536M
+            - name: MAX_DIRECT_MEMORY_SIZE
+              value: 512M
+          ports:
+            - name: cql
+              containerPort: 9042
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cassandra
+          resources:
+            requests:
+              cpu: 200m
+              memory: 2Gi
+            limits:
+              memory: 2560Mi # heap 1.5G + direct 512M + JVM overhead
+          # Cassandra takes 1-3 minutes to start on 1 OCPU; port 9042 opens when it is ready for clients.
+          startupProbe:
+            tcpSocket:
+              port: cql
+            periodSeconds: 10
+            failureThreshold: 60 # up to 10 minutes
+          readinessProbe:
+            tcpSocket:
+              port: cql
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: cql
+            periodSeconds: 30
+            failureThreshold: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cassandra
+  namespace: chat-db
+spec:
+  selector:
+    app: cassandra
+  ports:
+    - name: cql
+      port: 9042
+      targetPort: cql
+---
+# Only chat-service pods (namespace default) and pods inside chat-db (setup, backups)
+# may connect. Remember: brand-new pods are blocked for a few seconds; clients must retry.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cassandra-allow-chat-only
+  namespace: chat-db
+spec:
+  podSelector:
+    matchLabels:
+      app: cassandra
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+          podSelector:
+            matchLabels:
+              app: chat
+        - podSelector: {} # same namespace: setup and backup jobs
+      ports:
+        - port: 9042

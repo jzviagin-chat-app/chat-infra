@@ -1,0 +1,5 @@
+# Chat database (Cassandra) lives in its own namespace, fenced off by a NetworkPolicy.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chat-db

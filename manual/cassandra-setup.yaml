@@ -1,0 +1,88 @@
+# One-time Cassandra setup (safe to run again: every statement is idempotent).
+#  - creates superuser "admin" and disables the built-in "cassandra"/"cassandra" login
+#  - creates keyspace "chat" and user "chat_app" with read/write on it only
+#
+# NOT in k8s/, so Argo CD does not run it. Start it by hand (lb VM):
+#   kubectl create -f https://raw.githubusercontent.com/jzviagin-chat-app/chat-infra/main/manual/cassandra-setup.yaml
+#   kubectl -n chat-db logs -f cassandra-setup
+#   kubectl -n chat-db delete pod cassandra-setup
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cassandra-setup
+  namespace: chat-db
+  labels:
+    app: cassandra-setup
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    role: ops # the Cassandra image is already on this node
+  containers:
+    - name: setup
+      image: cassandra:5.0.9
+      command: ["bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          H=cassandra.chat-db.svc.cluster.local
+          # cqlsh warns about passwords on the command line every time; hide that noise only
+          cq() {
+            cqlsh "$H" 9042 -u "$1" -p "$2" --request-timeout=30 -e "$3" \
+              2> >(grep -v -e 'Using a password on the command line' -e 'use the credentials file' -e '^$' >&2)
+          }
+
+          echo "waiting for Cassandra..."
+          state=""
+          for i in $(seq 1 60); do
+            if cq admin "$ADMIN_PASSWORD" "SELECT release_version FROM system.local" >/dev/null 2>&1; then state=done; break; fi
+            if cq cassandra cassandra "SELECT release_version FROM system.local" >/dev/null 2>&1; then state=fresh; break; fi
+            sleep 5
+          done
+          [ -n "$state" ] || { echo "Cassandra not reachable after 5 minutes" >&2; exit 1; }
+
+          if [ "$state" = fresh ]; then
+            echo "first run: creating superuser admin"
+            cq cassandra cassandra "CREATE ROLE IF NOT EXISTS admin WITH SUPERUSER = true AND LOGIN = true AND PASSWORD = '$ADMIN_PASSWORD'"
+          else
+            echo "admin already exists"
+          fi
+
+          echo "disabling the built-in cassandra user"
+          random=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          cq admin "$ADMIN_PASSWORD" "ALTER ROLE cassandra WITH PASSWORD = '$random' AND SUPERUSER = false AND LOGIN = false"
+
+          echo "keyspace chat + user chat_app"
+          cq admin "$ADMIN_PASSWORD" "
+            CREATE KEYSPACE IF NOT EXISTS chat WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1};
+            CREATE ROLE IF NOT EXISTS chat_app WITH LOGIN = true AND PASSWORD = '$CHAT_APP_PASSWORD';
+            ALTER ROLE chat_app WITH PASSWORD = '$CHAT_APP_PASSWORD';
+            GRANT SELECT ON KEYSPACE chat TO chat_app;
+            GRANT MODIFY ON KEYSPACE chat TO chat_app;"
+
+          echo "--- check: chat_app can log in and see keyspace chat"
+          cq chat_app "$CHAT_APP_PASSWORD" "SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'chat'"
+          echo "--- check: default cassandra login is refused"
+          if cq cassandra cassandra "SELECT now() FROM system.local" >/dev/null 2>&1; then
+            echo "ERROR: cassandra/cassandra still works" >&2; exit 1
+          fi
+          echo "refused, good"
+          echo "SETUP OK"
+      env:
+        - name: HOME
+          value: /tmp
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cassandra-credentials
+              key: ADMIN_PASSWORD
+        - name: CHAT_APP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cassandra-credentials
+              key: CHAT_APP_PASSWORD
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 384Mi
