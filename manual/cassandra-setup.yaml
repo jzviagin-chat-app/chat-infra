@@ -51,11 +51,22 @@ spec:
           random=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
           cq admin "$ADMIN_PASSWORD" "ALTER ROLE cassandra WITH PASSWORD = '$random' AND SUPERUSER = false AND LOGIN = false"
 
-          echo "keyspace chat + user chat_app"
+          echo "keyspace chat"
+          cq admin "$ADMIN_PASSWORD" \
+            "CREATE KEYSPACE IF NOT EXISTS chat WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}"
+
+          # Create chat_app, or (re-run) set its password from the secret.
+          # Never both: Cassandra refuses two password changes within 5 seconds.
+          if cq admin "$ADMIN_PASSWORD" "SELECT role FROM system_auth.roles WHERE role = 'chat_app'" | grep -q chat_app; then
+            echo "user chat_app exists: setting its password from the secret"
+            cq admin "$ADMIN_PASSWORD" "ALTER ROLE chat_app WITH PASSWORD = '$CHAT_APP_PASSWORD'"
+          else
+            echo "creating user chat_app"
+            cq admin "$ADMIN_PASSWORD" "CREATE ROLE chat_app WITH LOGIN = true AND PASSWORD = '$CHAT_APP_PASSWORD'"
+          fi
+
+          echo "chat_app: read/write on keyspace chat only"
           cq admin "$ADMIN_PASSWORD" "
-            CREATE KEYSPACE IF NOT EXISTS chat WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1};
-            CREATE ROLE IF NOT EXISTS chat_app WITH LOGIN = true AND PASSWORD = '$CHAT_APP_PASSWORD';
-            ALTER ROLE chat_app WITH PASSWORD = '$CHAT_APP_PASSWORD';
             GRANT SELECT ON KEYSPACE chat TO chat_app;
             GRANT MODIFY ON KEYSPACE chat TO chat_app;"
 
