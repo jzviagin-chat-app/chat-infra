@@ -1,0 +1,44 @@
+# Scripts for the "backup" sidecar container inside the Cassandra pod (chat-db-cassandra.yaml).
+# Every night: snapshot keyspace "chat" -> tar.gz streamed to bucket chat-backups/cassandra/
+# -> delete the local snapshot. The bucket deletes files older than 14 days.
+#
+# Run one now (lb VM):  kubectl -n chat-db exec cassandra-0 -c backup -- /scripts/backup.sh
+# See past runs:        kubectl -n chat-db logs cassandra-0 -c backup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-backup-scripts
+  namespace: chat-db
+data:
+  backup.sh: |
+    #!/bin/bash
+    # One backup. Snapshot = instant hard links of the data files on this pod's disk.
+    set -euo pipefail
+    TAG="backup-$(date -u +%Y-%m-%dT%H%MZ)"
+    FILE="cassandra-chat-${TAG#backup-}.tar.gz"
+    trap 'nodetool clearsnapshot -t "$TAG" -- chat >/dev/null 2>&1 || true' EXIT   # never leave snapshots behind
+
+    echo "$(date -u +%FT%TZ) snapshot $TAG"
+    nodetool snapshot -t "$TAG" chat
+    cd /var/lib/cassandra/data
+    n=$(find chat -path "*/snapshots/$TAG/*" -type f | wc -l)
+    echo "uploading $n files as $FILE"
+    find chat -path "*/snapshots/$TAG/*" -type f -print0 \
+      | tar czf - --null -T - \
+      | /rclone/rclone rcat "oci:chat-backups/cassandra/$FILE" --s3-no-check-bucket
+    echo "--- files in chat-backups/cassandra/:"
+    /rclone/rclone ls oci:chat-backups/cassandra/
+    echo "$(date -u +%FT%TZ) BACKUP OK"
+
+  loop.sh: |
+    #!/bin/bash
+    # Sleeps until 00:45 UTC (03:45 Israel summer / 02:45 winter) every day, then backs up.
+    set -uo pipefail
+    echo "backup sidecar started; nightly at 00:45 UTC"
+    while true; do
+      now=$(date -u +%s)
+      next=$(date -u -d "today 00:45" +%s)
+      [ "$next" -gt "$now" ] || next=$(date -u -d "tomorrow 00:45" +%s)
+      sleep $((next - now))
+      /scripts/backup.sh || echo "$(date -u +%FT%TZ) BACKUP FAILED"
+    done

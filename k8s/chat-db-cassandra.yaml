@@ -5,6 +5,7 @@
 # Users (created once by manual/cassandra-setup.yaml):
 #   admin     superuser, for setup and admin work only
 #   chat_app  read/write on keyspace "chat" only; used by chat-service
+# Backups: the "backup" sidecar below (scripts in chat-db-cassandra-backup.yaml).
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -24,6 +25,14 @@ spec:
       nodeSelector:
         role: ops
       terminationGracePeriodSeconds: 120 # let Cassandra flush and stop cleanly
+      # Copy the rclone binary into a shared folder for the backup sidecar.
+      initContainers:
+        - name: get-rclone
+          image: rclone/rclone:1.68.2
+          command: ["cp", "/usr/local/bin/rclone", "/rclone/rclone"]
+          volumeMounts:
+            - name: rclone
+              mountPath: /rclone
       containers:
         - name: cassandra
           image: cassandra:5.0.9
@@ -73,6 +82,48 @@ spec:
               port: cql
             periodSeconds: 30
             failureThreshold: 5
+        # Nightly backup. Shares Cassandra's disk (to read snapshots) and network
+        # (nodetool talks to Cassandra on localhost:7199).
+        - name: backup
+          image: cassandra:5.0.9 # for nodetool; Cassandra itself is not started here
+          command: ["/scripts/loop.sh"]
+          env:
+            # rclone remote "oci" = Oracle Object Storage through its S3-compatible API
+            - name: RCLONE_CONFIG_OCI_TYPE
+              value: s3
+            - name: RCLONE_CONFIG_OCI_PROVIDER
+              value: Other
+            - name: RCLONE_CONFIG_OCI_ENDPOINT
+              value: https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com
+            - name: RCLONE_CONFIG_OCI_REGION
+              value: il-jerusalem-1
+            - name: RCLONE_CONFIG_OCI_FORCE_PATH_STYLE
+              value: "true"
+            - name: HOME
+              value: /tmp
+          envFrom:
+            - secretRef:
+                name: db-backups-s3 # RCLONE_CONFIG_OCI_ACCESS_KEY_ID / _SECRET_ACCESS_KEY
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cassandra
+            - name: rclone
+              mountPath: /rclone
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 512Mi # nodetool runs a small JVM (128 MB heap)
+      volumes:
+        - name: rclone
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: cassandra-backup-scripts
+            defaultMode: 0755
   volumeClaimTemplates:
     - metadata:
         name: data
