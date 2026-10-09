@@ -25,11 +25,12 @@ spec:
       nodeSelector:
         role: ops
       terminationGracePeriodSeconds: 120 # let Cassandra flush and stop cleanly
-      # Copy the rclone binary into a shared folder for the backup sidecar.
+      # Copy the rclone binary and the trusted HTTPS certificate list into a shared folder
+      # for the backup sidecar (the Cassandra image has neither).
       initContainers:
         - name: get-rclone
           image: rclone/rclone:1.68.2
-          command: ["cp", "/usr/local/bin/rclone", "/rclone/rclone"]
+          command: ["sh", "-c", "cp /usr/local/bin/rclone /etc/ssl/certs/ca-certificates.crt /rclone/"]
           volumeMounts:
             - name: rclone
               mountPath: /rclone
@@ -101,6 +102,8 @@ spec:
               value: "true"
             - name: HOME
               value: /tmp
+            - name: SSL_CERT_FILE # trusted certificates copied from the rclone image
+              value: /rclone/ca-certificates.crt
           envFrom:
             - secretRef:
                 name: db-backups-s3 # RCLONE_CONFIG_OCI_ACCESS_KEY_ID / _SECRET_ACCESS_KEY
