@@ -1,5 +1,8 @@
 # chat-infra
 
+> **System design:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (the system as built) and
+> [docs/PLAN.md](docs/PLAN.md) (phases, decisions, change log). The overview below is from the first phase.
+
 Terraform + k3s on Oracle Cloud Always Free:
 
 ```

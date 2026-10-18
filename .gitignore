@@ -5,3 +5,6 @@ sealed-secrets-key-backup* # extra protection: the key backup can never be commi
 *.tfvars
 .terraform.lock.hcl
 sealed-secrets-key-backup*
+
+# Claude Code: clones of other repos used as context
+.context/
