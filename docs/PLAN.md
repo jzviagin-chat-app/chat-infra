@@ -18,12 +18,23 @@ Update it whenever the plan changes, and push it in the same commit as the chang
 | **Costs nothing** | Oracle Cloud Always Free only. Every paid service must have hard caps (see SMS) |
 
 ### Working agreements
-- Only the owner pushes to `main` in every repo. Deploys happen by merging a PR.
+- **`main` is protected in every repo: nobody pushes to it directly, admins included.** Every change goes
+  through a branch + pull request, which the owner merges. Deploys happen by merging a PR in chat-infra.
 - One step at a time. Explain a phase before building it.
 - Every command uses root-anchored paths: `cd "$(git rev-parse --show-toplevel)"` first.
 - Every instruction says which machine it runs on (Mac / lb VM / ops VM).
 - Never commit `*.tfstate`, `*.tfvars`, `.terraform/` or `sealed-secrets-key-backup*`.
   Run `git status` before every commit.
+
+### How the system design is shared between repos
+- **Source of truth:** `chat-infra/docs/` — `ARCHITECTURE.md` (the system as built: services, data
+  ownership, contracts between services, conventions) and this `PLAN.md` (phases, decisions, change log).
+- Every service repo has a `CLAUDE.md` plus a Claude Code **SessionStart hook**
+  (`.claude/hooks/load-design.sh`) that clones/pulls chat-infra into a gitignored `.context/chat-infra/`
+  and loads both documents into the session. Works on any machine and in cloud sessions.
+- A change that affects another service, a contract, a database, the infra or a decision here is also
+  written into these documents (with a change-log row) as part of the same task, and merged through a
+  chat-infra PR. `/sync-design` (a Claude Code command in every repo) checks this at the end of a task.
 
 ---
 
@@ -232,6 +243,26 @@ Rules:
 
 ## 6. Auth design (auth-service)
 
+Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
+- **Stack:** Python 3.14, **uv** (`pyproject.toml` + `uv.lock`), **async FastAPI** on uvicorn, Pydantic v2,
+  SQLAlchemy 2.0 async + asyncpg, Alembic, pytest, ruff, mypy (strict). Same stack for chat-service.
+  Async rules: only async libraries inside `async def`; blocking work via `asyncio.to_thread`; scale with pods.
+- **Layers:** `api/` (HTTP only) → `services/` (business rules) → `db/` (models + repos). Dependencies point down.
+- **Sessions:** short JWT access token (15 min, **EdDSA/Ed25519**, claims `iss`, `sub`=user, `did`=device,
+  `iat`, `exp`, `jti`, `kid`) + opaque refresh token (60 days, SHA-256 hash stored, rotated on every use,
+  reuse ⇒ revoke the device's chain). Sent in headers (mobile: secure storage); web later: refresh token in an
+  HttpOnly SameSite=Strict cookie scoped to the refresh path. Not server sessions (shared store), not one
+  long JWT (unrevocable).
+- **Tables (migration 0001):** `users` (id UUIDv7, phone_e164 unique, display_name, avatar_key, status,
+  created_at), `devices` (id, user_id → users ON DELETE CASCADE, platform, name, created_at, last_seen_at,
+  revoked_at), `otp_challenges` (keyed by phone, not user: a code is sent before the user exists; code
+  HMAC only). Hard delete of users. Profile picture = object-storage **key**; clients get short-lived signed
+  URLs. Old OTP rows deleted after 24 h by a cleanup job. Later tables: `refresh_tokens`, `sms_daily_usage`
+  (global SMS cap in Postgres, not Redis), `device_links` (QR linking).
+- **Migrations in the cluster:** an init container runs `alembic upgrade head` before the app starts
+  (advisory lock so concurrent pods don't collide; connection retry for the NetworkPolicy delay).
+  Migrations must stay compatible with the previous app version (rolling deploys).
+
 - **Signup / login with SMS OTP:**
   - phone → OTP → verify → account + device registration.
   - Codes are hashed, short-lived (≈5 min), max ~5 attempts.
@@ -262,7 +293,7 @@ Rules:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | ⏳ next |
+| **7** | **Production auth-service** | 🔨 in progress: step 1 ✅, step 2 in review |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -302,10 +333,17 @@ How to use it: `docs/CASSANDRA.md`.
 5. Restore drill (`manual/cassandra-restore-test.yaml`): restores into a temporary Cassandra on a worker and checks a test row.
 
 ### Phase 7: Production auth-service
-- Schema migrations with Alembic. DB connection retries at startup (see the phase 5 lesson).
-- Endpoints: `request-otp`, `verify-otp`, `refresh`, `logout`, device registration, `jwks`.
-- Fake SMS sender in dev; the Twilio adapter is behind a flag and isn't switched on until the guards from section 6 are in place.
-- Rate limits, JSON logs, OTel traces, metrics, unit tests.
+Build steps (each tested and deployed before the next; detail in `auth-service/README.md`):
+1. ✅ Skeleton: uv, Python 3.14, async FastAPI layout, JSON logs, DB pool, Alembic, tests, CI, Docker (deployed 2026-10-13).
+2. 🔨 First tables (`users`, `devices`, `otp_challenges`) + migration 0001 + DB tests in CI + `migrate`
+   init container and `DATABASE_URL` in `k8s/auth.yaml`.
+3. `POST /auth/otp/request` with a fake SMS sender (₪0) + rate limits + daily SMS cap + OTP cleanup job.
+4. `POST /auth/otp/verify` → user + device.
+5. Signing keys (SealedSecret) + access tokens + `jwks.json`.
+6. Refresh tokens: issue, rotate, reuse detection, logout, devices list/remove.
+7. Tracing (OpenTelemetry → Tempo) + metrics.
+8. Dummy Expo app against it (phase 8).
+9. Real SMS provider behind a flag, with all cost guards (only when the owner decides).
 
 ### Phase 8: Dummy Expo app
 - Phone entry → OTP → token storage (secure store) → a "hello" screen that calls an authenticated endpoint.
@@ -329,6 +367,13 @@ How to use it: `docs/CASSANDRA.md`.
 - Redpanda commit log, fan-out and push workers.
 - Groups (fan-out through `conversation_members`).
 - Multi-device sync.
+- **Linking secondary devices by QR code** (WhatsApp-style; design notes, not scheduled): the new device calls
+  `POST /auth/link/start` and shows a QR with a short-lived single-use pairing token (later also its public
+  key); the signed-in phone scans it and calls `POST /auth/link/approve`; the server creates the device and
+  the new device receives its tokens (long-poll/poll). No SMS cost, approval comes from a trusted device,
+  fits E2E key sharing. Needs a `device_links` table and probably `devices.linked_by_device_id`.
+- **Profile pictures:** upload to object storage (private bucket), store the key in `users.avatar_key`,
+  serve via short-lived signed URLs (media service or auth-service).
 - E2E encryption (Signal-protocol style; server stores ciphertext only).
 - Media service: pictures, voice memos, video, stored in object storage with presigned URLs.
 - Web client.
@@ -346,3 +391,4 @@ How to use it: `docs/CASSANDRA.md`.
 | 2026-10-08 | First version of this plan. Decided: Postgres for auth only; Cassandra for all chat data including server-side history. Phase 5 rescoped to auth DB + backups; new phase 6 for Cassandra. |
 | 2026-10-08 | Phase 5 done: Postgres on ops, NetworkPolicy, nightly `pg_dumpall` backup to `chat-backups`, restore drill passed. Added `docs/DATABASE.md` and the `manual/` folder for hand-run jobs. |
 | 2026-10-09 | Phase 6 done: Cassandra 5.0.9 on ops, users + NetworkPolicy, 7 chat tables, numbering decided (LWT, benchmarked), nightly snapshot backup sidecar, restore drill passed. Added `docs/CASSANDRA.md`. |
+| 2026-10-18 | Auth design recorded (stack, layers, tokens, tables). Phase 7 step 1 done. Added `docs/ARCHITECTURE.md` and per-repo Claude Code context (CLAUDE.md + SessionStart hook loading chat-infra docs). `main` protected in all repos (PRs only, admins included). QR device linking and profile pictures added to Later. |

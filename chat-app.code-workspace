@@ -1,0 +1,15 @@
+{
+  // Optional: opens all repos in one VS Code window. Expects the repos side by side, e.g.
+  //   ~/code/chat-infra, ~/code/auth-service, ~/code/chat-service
+  // Open it with: code ~/code/chat-infra/chat-app.code-workspace
+  // Run Claude Code inside ONE repo's folder at a time (its own CLAUDE.md and hooks apply).
+  "folders": [
+    { "path": "." , "name": "chat-infra" },
+    { "path": "../auth-service" },
+    { "path": "../chat-service" }
+  ],
+  "settings": {
+    "files.exclude": { "**/.context": true, "**/.venv": true, "**/__pycache__": true },
+    "search.exclude": { "**/.context": true, "**/.venv": true, "**/uv.lock": true }
+  }
+}
