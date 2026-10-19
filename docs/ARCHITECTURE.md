@@ -13,7 +13,7 @@ Last updated: 2026-10-19.
 | Repo | What | Status |
 |---|---|---|
 | `chat-infra` | Terraform (Oracle Cloud), Kubernetes manifests (`k8s/`, deployed by Argo CD), hand-run jobs (`manual/`), **all system docs (`docs/`)** | live |
-| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | skeleton deployed; tables in progress |
+| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | deployed: skeleton + tables (`users`, `devices`, `otp_challenges`); no feature endpoints yet |
 | `chat-service` | WebSocket messaging. Will use the same stack as auth-service | placeholder (echo server) |
 | mobile app (later) | Expo / React Native + TypeScript | not started |
 

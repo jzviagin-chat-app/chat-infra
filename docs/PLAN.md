@@ -293,7 +293,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: step 1 ✅, step 2 in review |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–2 ✅, step 3 next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -335,8 +335,8 @@ How to use it: `docs/CASSANDRA.md`.
 ### Phase 7: Production auth-service
 Build steps (each tested and deployed before the next; detail in `auth-service/README.md`):
 1. ✅ Skeleton: uv, Python 3.14, async FastAPI layout, JSON logs, DB pool, Alembic, tests, CI, Docker (deployed 2026-10-13).
-2. 🔨 First tables (`users`, `devices`, `otp_challenges`) + migration 0001 + DB tests in CI
-   (auth-service PR #2) + `migrate` init container and `DATABASE_URL` in `k8s/auth.yaml` (chat-infra).
+2. ✅ First tables (`users`, `devices`, `otp_challenges`) + migration 0001 + DB tests in CI
+   (auth-service PR #2) + `migrate` init container and `DATABASE_URL` in `k8s/auth.yaml` (chat-infra). Deployed 2026-10-19: tables created in the cluster by the `migrate` init container.
 3. `POST /auth/otp/request` with a fake SMS sender (₪0) + rate limits + daily SMS cap + OTP cleanup job.
 4. `POST /auth/otp/verify` → user + device.
 5. Signing keys (SealedSecret) + access tokens + `jwks.json`.
@@ -393,3 +393,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-09 | Phase 6 done: Cassandra 5.0.9 on ops, users + NetworkPolicy, 7 chat tables, numbering decided (LWT, benchmarked), nightly snapshot backup sidecar, restore drill passed. Added `docs/CASSANDRA.md`. |
 | 2026-10-18 | Auth design recorded (stack, layers, tokens, tables). Phase 7 step 1 done. Added `docs/ARCHITECTURE.md` and per-repo Claude Code context (CLAUDE.md + SessionStart hook loading chat-infra docs). `main` protected in all repos (PRs only, admins included). QR device linking and profile pictures added to Later. |
 | 2026-10-19 | `k8s/auth.yaml`: auth pods get `DATABASE_URL` from Secret `auth-db`; new `migrate` init container runs `alembic upgrade head` before the app (same image, both tags bumped by the auth-service pipeline). `DATABASE.md` gains a schema-migrations section. |
+| 2026-10-19 | Phase 7 step 2 done: migration 0001 applied in the cluster (`users`, `devices`, `otp_challenges` in database `auth`) by the `migrate` init container (auth-service#2, chat-infra#7). |
