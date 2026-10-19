@@ -21,6 +21,26 @@ spec:
           labelSelector:
             matchLabels:
               app: auth
+      # Runs before the app on every pod start: applies new database migrations (Alembic).
+      # Safe with several pods at once (advisory lock in alembic/env.py); a no-op when up to date.
+      # If it fails, the new pod never starts and the old pods keep serving.
+      initContainers:
+        - name: migrate
+          # Must be the same image as the app below. The auth-service pipeline bumps both tags.
+          image: ghcr.io/jzviagin-chat-app/auth-service:sha-6e0132ba7ea2
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: auth-db # sealed in auth-db-sealed.yaml
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
       containers:
         - name: auth
           # The tag is bumped automatically by a PR from the auth-service pipeline.
@@ -32,6 +52,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: auth-db
+                  key: DATABASE_URL
           resources:
             requests:
               cpu: 100m
