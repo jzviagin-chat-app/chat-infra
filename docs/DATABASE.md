@@ -26,6 +26,26 @@ The `auth` user and database are created by a script that runs only on the very 
 (empty data folder). Changing `AUTH_DB_PASSWORD` later does not change the password inside Postgres:
 see "Change a password" below.
 
+## Schema migrations (auth-service)
+The tables are defined in the auth-service repo (`src/auth_service/db/models.py`) and changed only through
+Alembic migrations (`alembic/versions/`). They are applied automatically:
+
+- Every auth pod has an init container `migrate` (in `k8s/auth.yaml`) that runs `alembic upgrade head`
+  with the same image as the app, **before** the app container starts.
+- Several pods starting together are safe: `alembic/env.py` takes a Postgres advisory lock, so one migrates
+  and the others wait, then find nothing to do. It also retries the first connection (NetworkPolicy delay).
+- If a migration fails, the new pod stays in `Init:Error` / `Init:CrashLoopBackOff` and never serves; the
+  old pods keep running. Fix the migration in auth-service, deploy again.
+- Rolling deploys run the old app next to the new schema, so migrations must stay backward compatible
+  (add first, remove in a later release).
+
+```bash
+kubectl get pods -l app=auth                                   # Init:0/1 = migrating
+kubectl logs deploy/auth -c migrate                            # "Running upgrade ... -> 0001" (or nothing new)
+kubectl -n database exec postgres-0 -- psql -U postgres -d auth -c '\dt'                 # tables
+kubectl -n database exec postgres-0 -- psql -U postgres -d auth -c 'select * from alembic_version'
+```
+
 ## Who can connect
 A NetworkPolicy allows only:
 - pods labelled `app=auth` in namespace `default`, and

@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-18.
+Last updated: 2026-10-19.
 
 ---
 
@@ -53,7 +53,8 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Planned API: `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/token/refresh`,
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
   Live today: `GET /healthz`, `GET /auth/healthz`.
-- Migrations: Alembic, run by a `migrate` init container before the app starts (being added).
+- Gets `DATABASE_URL` from Secret `auth-db`. Migrations: Alembic, run by the `migrate` init container in
+  `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
 
 ### chat-service (`/`, WebSocket `/ws`)
 - Owns: inboxes, chat lists, conversation members, message history. Keyspace `chat` on Cassandra
