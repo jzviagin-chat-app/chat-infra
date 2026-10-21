@@ -5,11 +5,16 @@ metadata:
   annotations:
     # cert-manager sees this and creates the certificate for the host below.
     cert-manager.io/cluster-issuer: letsencrypt
-    # Plain http:// keeps working for now (the certificate challenge uses port 80).
-    # Switch to "true" once https is confirmed working.
-    cert-manager.io/cluster-issuer: letsencrypt
+    # http:// redirects to https:// (the certificate challenge on port 80 still works).
     haproxy.org/ssl-redirect: "true"
     haproxy.org/ssl-redirect-port: "443"
+    # Coarse per-IP limit for all traffic: stops one machine hammering any service, before it
+    # reaches the apps. Generous on purpose: mobile carriers put many users behind one shared IP
+    # (carrier-grade NAT). Business limits (per phone, per IP per hour, daily SMS cap) live in
+    # auth-service. A WebSocket connection counts once (its upgrade request), not per message.
+    haproxy.org/rate-limit-requests: "200"
+    haproxy.org/rate-limit-period: "10s"
+    haproxy.org/rate-limit-status-code: "429"
 spec:
   ingressClassName: haproxy
   tls:
