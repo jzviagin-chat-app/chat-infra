@@ -42,6 +42,9 @@ Last updated: 2026-10-21.
         Oracle Object Storage (S3 API): chat-logs, chat-traces, chat-backups
 ```
 
+Rate limiting at the edge: HAProxy allows 200 requests per 10 s per client IP on every route (`k8s/ingress.yaml`),
+then answers `429`. Deliberately generous (carrier-grade NAT); stricter, business-specific limits live in the services.
+
 Client IPs: the HAProxy ingress Service uses `externalTrafficPolicy: Local`, so HAProxy sees the real client IP
 and passes it to the apps in `X-Forwarded-For` (apps run uvicorn with `--proxy-headers`). Note: HAProxy is installed
 by k3s from `/var/lib/rancher/k3s/server/manifests/haproxy-ingress.yaml` on the lb VM (written by cloud-init from
