@@ -87,7 +87,7 @@ VCN, plus SSH from `ssh_source_cidr`) and `web` (80/443 to `lb` only).
 | cert-manager + Let's Encrypt | HTTPS for `jzviagin-chat-app.129-159-150-34.sslip.io`; HTTP redirects to 443 |
 | Argo CD | GitOps: deploys everything in `chat-infra/k8s/` |
 | Sealed Secrets | Secrets are encrypted offline with `sealed-secrets/pub-cert.pem` (`kubeseal`) and committed safely. The controller key backup lives outside git |
-| Redis | On `lb`. Connection registry + pub/sub between chat instances. **Holds only rebuildable state** |
+| Redis | On `lb`. Connection registry + pub/sub between chat instances (db 0); auth's rate-limit counters (db 1). **Holds only rebuildable state** |
 
 Ingress routes: `/auth` → `auth:8000`, `/` → `chat:8000`.
 
@@ -269,7 +269,12 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 - **SMS provider:** Twilio, prepaid through **PayPal only** (no credit card). Hard spending protection:
   - Auto-recharge **off**, and the PayPal automatic-payment authorisation cancelled after topping up.
   - SMS geo permissions: **Israel only**.
-  - A global daily SMS cap in our code, plus per-phone and per-IP rate limits (stored in Postgres/Redis).
+  - A global daily SMS cap in our code, plus per-phone and per-IP rate limits. Decided 2026-10-21:
+    per-phone / per-IP counters in **Redis** (atomic `INCR` + expiry; a flood is rejected without touching
+    Postgres; losing them on a Redis restart is acceptable). The global daily cap in **Postgres**
+    (`sms_daily_usage`, one atomic `UPDATE … SET sent = sent + 1 WHERE … sent < cap RETURNING`): it guards
+    money, so it must survive restarts and be exact when two pods race. If Redis is unreachable, auth
+    refuses to send codes (fail closed); everything else keeps working.
   - **Development: a fake SMS sender** that logs a masked notice, with the code readable only in dev. Costs ₪0.
 - **Tokens:**
   - Short-lived access JWT (≈15 min), signed with an asymmetric key. Public keys are published at `/auth/.well-known/jwks.json`, so chat-service verifies locally.
@@ -394,3 +399,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-18 | Auth design recorded (stack, layers, tokens, tables). Phase 7 step 1 done. Added `docs/ARCHITECTURE.md` and per-repo Claude Code context (CLAUDE.md + SessionStart hook loading chat-infra docs). `main` protected in all repos (PRs only, admins included). QR device linking and profile pictures added to Later. |
 | 2026-10-19 | `k8s/auth.yaml`: auth pods get `DATABASE_URL` from Secret `auth-db`; new `migrate` init container runs `alembic upgrade head` before the app (same image, both tags bumped by the auth-service pipeline). `DATABASE.md` gains a schema-migrations section. |
 | 2026-10-19 | Phase 7 step 2 done: migration 0001 applied in the cluster (`users`, `devices`, `otp_challenges` in database `auth`) by the `migrate` init container (auth-service#2, chat-infra#7). |
+| 2026-10-21 | Rate limits decided: per-phone / per-IP in Redis (db 1, auth may now reach Redis; `REDIS_URL` in `k8s/auth.yaml`), global daily SMS cap in Postgres (`sms_daily_usage`); fail closed if Redis is down. |

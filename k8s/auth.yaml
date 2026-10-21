@@ -57,6 +57,8 @@ spec:
                 secretKeyRef:
                   name: auth-db
                   key: DATABASE_URL
+            - name: REDIS_URL # rate-limit counters; db 1 keeps them apart from chat's db 0
+              value: redis://redis:6379/1
           resources:
             requests:
               cpu: 100m
