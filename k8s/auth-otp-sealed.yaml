@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: auth-otp
+  namespace: default
+spec:
+  encryptedData:
+    OTP_PEPPER: AgAX0WAQ0EsJr1U1mn0CrkNiXRrzErtzhC2zPc80tcmNEZbkkP52JOpJba0QkRS6GD3k7uI5u2U++Ch5wuneA/cmWRqbjyNc/bS/1oY6ZrbivLQm+SGCQfTdxVnwCuQrrVDSodYg6pvr+cXlOtWwXax3blu0OK49UOf2kdSiqV7xn8QlNRKSv32o9RNoVHrHGYmghsVdqDBKkpMcoDruKpnha6o0rOIhj/3L1d5Juz9TBIKN0yHZFzSMMcpQOoTC2RMFquvq63/UP+waM3znNiCmtQYVTumJQPbfrK7rnaEgOKeN/EI4AVs8QtEEns3P5lyxA9zhcl0F1WM4uLx337iZ2m4ccytpZvwxgHnOL+ms9xJNhhLmGyN7ZhONt62mvVkGMa4xXmOWnFFgfha5+e4HJ2K2Fdb567uTLJ7fIvltcC/Zr7w/JslcebhYRIxCUbY3dR7DnfDIuCs4QOrIMMyAMZ5u4mKwHO2mHvdvdMotV4mzMUhotUtuTJH1HJW+BYDCTWnwfV83L6MIhov2QSnzQH7Sj3DiEhxAjycq9CrYiJ2aGNflvpiXAnAI363qzmT6Ae9204f+DvJdBWbRJI7u7FAAVJm+Gn+XX/OzgzkimGvJuFaJ6mID3mvgZvzOi4r+/YgXy4BXR1CsnSu9DZK6lPUT9Pe2J3mZtJk5AkrmSGAI3vZiHm6a/OcbQFpmZnN83oQuSs0rJvm4RXcfzw93nrRdRpU2zrmZkmkiMqWf2n72pbdgcI1/ZkDjwRqxYsgBpFZa65SgKjGKVNNqmzrE
+  template:
+    metadata:
+      name: auth-otp
+      namespace: default
