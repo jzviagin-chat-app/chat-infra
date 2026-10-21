@@ -61,7 +61,8 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Planned API: `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/token/refresh`,
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
   Live today: `GET /healthz`, `GET /auth/healthz`.
-- Gets `DATABASE_URL` from Secret `auth-db` and `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
+- Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes) and
+  `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
   `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
 
 ### chat-service (`/`, WebSocket `/ws`)
@@ -134,6 +135,7 @@ keep the old behaviour working until every consumer is updated.
 | Secret | Namespace | Keys | Used by |
 |---|---|---|---|
 | `auth-db` | default | `DATABASE_URL` | auth-service |
+| `auth-otp` | default | `OTP_PEPPER` (32 random bytes, hex) | auth-service: codes are stored as HMAC-SHA256(pepper, phone:code) |
 | `chat-db` | default | `CASSANDRA_USERNAME`, `CASSANDRA_PASSWORD` | chat-service (phase 9) |
 | `postgres-credentials` | database | `POSTGRES_PASSWORD`, `AUTH_DB_PASSWORD` | Postgres, backup job |
 | `cassandra-credentials` | chat-db | `ADMIN_PASSWORD`, `CHAT_APP_PASSWORD` | Cassandra setup/backup |
