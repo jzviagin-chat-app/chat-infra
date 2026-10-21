@@ -42,6 +42,11 @@ Last updated: 2026-10-21.
         Oracle Object Storage (S3 API): chat-logs, chat-traces, chat-backups
 ```
 
+Client IPs: the HAProxy ingress Service uses `externalTrafficPolicy: Local`, so HAProxy sees the real client IP
+and passes it to the apps in `X-Forwarded-For` (apps run uvicorn with `--proxy-headers`). Note: HAProxy is installed
+by k3s from `/var/lib/rancher/k3s/server/manifests/haproxy-ingress.yaml` on the lb VM (written by cloud-init from
+`terraform/cloud-init/haproxy-ingress.yaml`); changes must be made in both places (Terraform ignores user-data changes).
+
 Oracle Cloud Always Free: 4 ARM VMs (1 OCPU / 6 GB / 50 GB each) = the whole free allowance.
 Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on workers, stateful things on
 `ops` (databases) or `lb` (Redis)**.

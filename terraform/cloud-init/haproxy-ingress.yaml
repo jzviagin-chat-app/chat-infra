@@ -17,6 +17,9 @@ spec:
         default: true
       service:
         type: LoadBalancer
+        # Keep the client's real IP (otherwise k3s's ServiceLB rewrites it to 10.42.0.1 before HAProxy).
+        # Safe here: HAProxy runs on the lb node, the only node ServiceLB uses.
+        externalTrafficPolicy: Local
       config:
         load-balance: leastconn
         timeout-tunnel: 1h

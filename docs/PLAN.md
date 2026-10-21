@@ -400,3 +400,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-19 | `k8s/auth.yaml`: auth pods get `DATABASE_URL` from Secret `auth-db`; new `migrate` init container runs `alembic upgrade head` before the app (same image, both tags bumped by the auth-service pipeline). `DATABASE.md` gains a schema-migrations section. |
 | 2026-10-19 | Phase 7 step 2 done: migration 0001 applied in the cluster (`users`, `devices`, `otp_challenges` in database `auth`) by the `migrate` init container (auth-service#2, chat-infra#7). |
 | 2026-10-21 | Rate limits decided: per-phone / per-IP in Redis (db 1, auth may now reach Redis; `REDIS_URL` in `k8s/auth.yaml`), global daily SMS cap in Postgres (`sms_daily_usage`); fail closed if Redis is down. |
+| 2026-10-21 | Client IP was lost (apps saw 10.42.0.1): HAProxy ingress Service set to `externalTrafficPolicy: Local` (cloud-init file + the live manifest on the lb VM), needed for per-IP rate limits. |
