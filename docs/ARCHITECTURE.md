@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-19.
+Last updated: 2026-10-21.
 
 ---
 
@@ -53,7 +53,7 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Planned API: `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/token/refresh`,
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
   Live today: `GET /healthz`, `GET /auth/healthz`.
-- Gets `DATABASE_URL` from Secret `auth-db`. Migrations: Alembic, run by the `migrate` init container in
+- Gets `DATABASE_URL` from Secret `auth-db` and `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
   `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
 
 ### chat-service (`/`, WebSocket `/ws`)
@@ -67,10 +67,11 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 |---|---|---|---|
 | Postgres 17 | `postgres.database.svc.cluster.local:5432`, db `auth` | auth-service | `users`, `devices`, `otp_challenges` (migration 0001); later `refresh_tokens`, `sms_daily_usage`, `device_links` |
 | Cassandra 5.0.9 | `cassandra.chat-db.svc.cluster.local:9042`, keyspace `chat` | chat-service | `inbox_by_device`, `device_inbox_seq`, `messages_by_conversation`, `conversation_seq`, `user_conversations`, `conversation_members`, `devices_by_user` |
-| Redis 7.4 | `redis://redis:6379/0` (namespace default) | chat-service | only rebuildable state: connection registry, pub/sub, rate-limit counters |
+| Redis 7.4 | `redis://redis:6379` (namespace default): db `0` chat, db `1` auth | chat-service (db 0), auth-service (db 1) | only rebuildable state: chat's connection registry and pub/sub; auth's per-phone / per-IP rate-limit counters (keys `auth:rl:…`) |
 | Object storage | `https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com` | infra | `chat-logs` (Loki), `chat-traces` (Tempo), `chat-backups` (`postgres/`, `cassandra/`); later media |
 
-Network rules: Postgres accepts only pods `app=auth` (namespace default) and pods in `database`;
+Network rules: Redis accepts only pods `app=chat` and `app=auth`. Postgres accepts only pods `app=auth`
+(namespace default) and pods in `database`;
 Cassandra accepts only `app=chat` and pods in `chat-db`. Details: `DATABASE.md`, `CASSANDRA.md`.
 
 ## 5. Contracts between services

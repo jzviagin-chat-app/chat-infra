@@ -1,4 +1,5 @@
-# Redis: connection registry, presence and the pub/sub bus between chat instances.
+# Redis: connection registry, presence and the pub/sub bus between chat instances (db 0),
+# and auth-service's per-phone / per-IP rate-limit counters (db 1, keys prefixed "auth:").
 # Holds only data that can be rebuilt, so no persistence: a restart loses nothing important.
 apiVersion: apps/v1
 kind: Deployment
@@ -50,7 +51,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: redis # chat pods connect to redis://redis:6379
+  name: redis # chat: redis://redis:6379/0, auth: redis://redis:6379/1
 spec:
   selector:
     app: redis
@@ -58,7 +59,7 @@ spec:
     - port: 6379
       targetPort: 6379
 ---
-# Only chat pods may talk to Redis. Nothing else in the cluster, and nothing from outside.
+# Only chat and auth pods may talk to Redis. Nothing else in the cluster, and nothing from outside.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -74,5 +75,8 @@ spec:
         - podSelector:
             matchLabels:
               app: chat
+        - podSelector:
+            matchLabels:
+              app: auth
       ports:
         - port: 6379
