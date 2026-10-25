@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-25.
 
 ---
 
@@ -136,6 +136,7 @@ keep the old behaviour working until every consumer is updated.
 |---|---|---|---|
 | `auth-db` | default | `DATABASE_URL` | auth-service |
 | `auth-otp` | default | `OTP_PEPPER` (32 random bytes, hex) | auth-service: codes are stored as HMAC-SHA256(pepper, phone:code) |
+| `auth-sms` | default | `SMS_API_KEY` (Global SMS, api.itnewsletter.co.il) | auth-service: sending SMS codes (not wired into `k8s/auth.yaml` yet) |
 | `chat-db` | default | `CASSANDRA_USERNAME`, `CASSANDRA_PASSWORD` | chat-service (phase 9) |
 | `postgres-credentials` | database | `POSTGRES_PASSWORD`, `AUTH_DB_PASSWORD` | Postgres, backup job |
 | `cassandra-credentials` | chat-db | `ADMIN_PASSWORD`, `CHAT_APP_PASSWORD` | Cassandra setup/backup |

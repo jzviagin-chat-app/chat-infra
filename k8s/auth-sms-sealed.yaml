@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: auth-sms
+  namespace: default
+spec:
+  encryptedData:
+    SMS_API_KEY: AgAD1yEletyw07TwI8TVMTbYEIUMqIpJdsAaQDxtL+6LN7RBZ/JDwuA5ueDMLL/gpjvbhgLRcFtabUqDQYZFpXkaSmqntKVWn+Kl6EwVaUUMmmRyGPMSQq5tKwQpWC21FmVTiJW5yHMrnQwj/f7keso0MSTvlf36ov1zqoymxoOpfwT8kbO/9p+YHjsTi/LcgqNPfZgYOlURFPwXH/GAM2lBF1i03BpFjgIkZBt/bW+WnyGitCNJ/QRlCdILIJSAoFQgs5VJoUSqOhHf2DsiyvuzFB2lv0aWrc0kZjaxui3mD5DBo53rXlOEM5id2TyztlQxRSEJlwglGRrgehQmhW1O+WbT4yq/RO+trEofq7/XZtcO3KdUI9Lqo/zcan2NZYeQSWtyQdV6VtKtTp/XJut0Pw9yb4qgsvksURyocYq7xijQm08F3Dl0Z4EvljQ5FgzN68++tUAxIjmq4s0BaQa1rIWxtK+2+ALCHuxTaPbrHHhbqpQgktczGD8lrGPGEVwsR4TSKc/dHkHcxbWSxUXQC/+Amx9QecPlRfVPHxyXDMeouqpjaswFMV1si3Tfo6qunrKGd8qDzJvbNRq0SqCJWkAUhdopj6u5frUNrv+mRUAzIgGwOPIdJ2GOxCwARvDTBxpSKxepQiIK7WusJ5o2M3epHOogIWyHvNioJfUCQYcdPjZpGJDeaSaMUN6TfJzoHrU5icifOklyMeac5evNA+ik4emn4PG7rj4pqgfmdA==
+  template:
+    metadata:
+      name: auth-sms
+      namespace: default
