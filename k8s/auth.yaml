@@ -64,6 +64,13 @@ spec:
                 secretKeyRef:
                   name: auth-otp # sealed in auth-otp-sealed.yaml
                   key: OTP_PEPPER
+            - name: GLOBALSMS_API_KEY # Global SMS API key
+              valueFrom:
+                secretKeyRef:
+                  name: auth-sms # sealed in auth-sms-sealed.yaml
+                  key: SMS_API_KEY
+            - name: SMS_PROVIDER # fake (default) or globalsms
+              value: globalsms
           resources:
             requests:
               cpu: 100m
