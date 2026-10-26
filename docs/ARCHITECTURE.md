@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-25.
+Last updated: 2026-10-26.
 
 ---
 
@@ -61,9 +61,13 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Planned API: `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/token/refresh`,
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
   Live today: `GET /healthz`, `GET /auth/healthz`.
-- Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes) and
+- Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes),
+  `GLOBALSMS_API_KEY` from Secret `auth-sms`, `SMS_PROVIDER=globalsms` and
   `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
   `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
+- External dependency: **Global SMS** (Israeli SMS provider, prepaid) sends the login codes, via
+  `https://sapi.itnewsletter.co.il` (the `sapi` host has no IP allow-list: the API key alone authorizes sending).
+  Host, sender name and daily cap are defaults in the auth-service code (`GLOBALSMS_*` env vars override them).
 
 ### chat-service (`/`, WebSocket `/ws`)
 - Owns: inboxes, chat lists, conversation members, message history. Keyspace `chat` on Cassandra
@@ -136,7 +140,7 @@ keep the old behaviour working until every consumer is updated.
 |---|---|---|---|
 | `auth-db` | default | `DATABASE_URL` | auth-service |
 | `auth-otp` | default | `OTP_PEPPER` (32 random bytes, hex) | auth-service: codes are stored as HMAC-SHA256(pepper, phone:code) |
-| `auth-sms` | default | `SMS_API_KEY` (Global SMS, api.itnewsletter.co.il) | auth-service: sending SMS codes (not wired into `k8s/auth.yaml` yet) |
+| `auth-sms` | default | `SMS_API_KEY` (Global SMS API key) | auth-service: sending SMS codes (env `GLOBALSMS_API_KEY`) |
 | `chat-db` | default | `CASSANDRA_USERNAME`, `CASSANDRA_PASSWORD` | chat-service (phase 9) |
 | `postgres-credentials` | database | `POSTGRES_PASSWORD`, `AUTH_DB_PASSWORD` | Postgres, backup job |
 | `cassandra-credentials` | chat-db | `ADMIN_PASSWORD`, `CHAT_APP_PASSWORD` | Cassandra setup/backup |
