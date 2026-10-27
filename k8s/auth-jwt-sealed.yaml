@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: auth-jwt
+  namespace: default
+spec:
+  encryptedData:
+    JWT_PRIVATE_KEY: AgAnZwSrjTbWW2Is7Gfh8bGkZo+lHS4nxWA5r5paxDb2q7V5JmPA9CKnDLi1//4zlHY2oERcAsGh22ys34lWc+K/VwCbFoAF69ddWGf09UO4Or5JK3YFn4FmP9UZZXu7xaGriB4QJgk/I82mkNQFeErchdblKXFF4e/veTFiLjFgck4LZjN3b3iQgP0VozneBUjTuLyj/Esdo8y0rxuJ551DYmVuV/0cQl9jsEl67OV9RoUavmcb95oTi0zHXJvxAjeir2fYSm42G4WM3XT4FJxOfyjwA0tekFQ7XOTRM01SJhpP7RLBXehcdatnukyEauBS0HCVbgQQAkc14JuPzRF0M3Tk43BWQcJVvAal6RqBWalAopg+RhSsgZdUUbHajtYlwIIthopN5FhYHOjjMNn2qzrtVIVo1sIoJJU4CaUoSLWxo1HGmduuaNKpL1j4ShAPSfIeWSwe/wuajZipk82m+YXsi2C7S8bTJH3QM18eHvJBO0DECITKNYX7A2nbmfK63XTF4uc9rH7psxyQXGp+Dx0Vg60n2FJdJeOqlASZM6Om5QRYOCdoHmMoY5pn+tho4X5DDddZnRxBRrdu/TxuJfGh8RAusg8X1tlBpQxg5ww6vgVtjNXxi8rE4BNNAvbKQaQlyScfAg6xBI4lMDtKuO5Rzi7FtxQTQFCWI2A7ZKA6TE0TVBXMFTakeTm6zX6md+UlveSpd58nbLxKcB82+uUXzCpTP4py3YyXeknrLdzr66CQgTsY+h19kWdlOMXird/femqS/kAIUM53id79Mvto7X3IqSNWutOJg4A2EIO7ZH6TypeE/aKwb6KrP8RrsaLD4PY1axkGyX44HPNPGSZQkob1sQ==
+  template:
+    metadata:
+      name: auth-jwt
+      namespace: default
