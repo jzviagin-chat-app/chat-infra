@@ -71,6 +71,17 @@ spec:
                   key: SMS_API_KEY
             - name: SMS_PROVIDER # fake (default) or globalsms
               value: globalsms
+            - name: JWT_PRIVATE_KEY # signs access tokens
+              valueFrom:
+                secretKeyRef:
+                  name: auth-jwt # sealed in auth-jwt-sealed.yaml
+                  key: JWT_PRIVATE_KEY
+            - name: JWT_PREVIOUS_PUBLIC_KEY # only during a key rotation (ARCHITECTURE.md 5.1)
+              valueFrom:
+                secretKeyRef:
+                  name: auth-jwt
+                  key: JWT_PREVIOUS_PUBLIC_KEY
+                  optional: true # absent outside a rotation
           resources:
             requests:
               cpu: 100m

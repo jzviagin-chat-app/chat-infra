@@ -298,7 +298,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: steps 1–2 ✅, step 3 next |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–3 and 5 ✅, step 4 next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -342,9 +342,9 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 1. ✅ Skeleton: uv, Python 3.14, async FastAPI layout, JSON logs, DB pool, Alembic, tests, CI, Docker (deployed 2026-10-13).
 2. ✅ First tables (`users`, `devices`, `otp_challenges`) + migration 0001 + DB tests in CI
    (auth-service PR #2) + `migrate` init container and `DATABASE_URL` in `k8s/auth.yaml` (chat-infra). Deployed 2026-10-19: tables created in the cluster by the `migrate` init container.
-3. `POST /auth/otp/request` with a fake SMS sender (₪0) + rate limits + daily SMS cap + OTP cleanup job.
-4. `POST /auth/otp/verify` → user + device.
-5. Signing keys (SealedSecret) + access tokens + `jwks.json`.
+3. ✅ `POST /auth/otp/request` with a fake SMS sender (₪0) + rate limits + daily SMS cap + OTP cleanup job.
+4. Next: `POST /auth/otp/verify` → user + device, Telegram-like (verify + register).
+5. ✅ (built before step 4) Signing keys (SealedSecret) + access tokens + `jwks.json`.
 6. Refresh tokens: issue, rotate, reuse detection, logout, devices list/remove.
 7. Tracing (OpenTelemetry → Tempo) + metrics.
 8. Dummy Expo app against it (phase 8).
@@ -405,3 +405,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-21 | New SealedSecret `auth-otp` (`OTP_PEPPER`) wired into the auth app container, for phase 7 step 3 (codes stored only as HMAC). Pod network confirmed as the k3s default `10.42.0.0/16` (auth-service will trust only that range for `X-Forwarded-For`). |
 | 2026-10-25 | SMS provider: Global SMS (Israeli, prepaid packages) instead of Twilio (~$0.26/SMS). New SealedSecret `auth-sms` (`SMS_API_KEY`); not used by pods yet. A test call from home got 403, probably an IP allowlist on the key: provider setup (and the cluster's outgoing IP) still to finish. |
 | 2026-10-26 | Real SMS is live via Global SMS: `k8s/auth.yaml` sets `SMS_PROVIDER=globalsms` and `GLOBALSMS_API_KEY` (Secret `auth-sms`). auth-service uses the `sapi.itnewsletter.co.il` host, which isn't IP-restricted, so no allow-list for the cluster is needed (the 403 of 2026-10-25 was the IP-restricted `api` host). |
+| 2026-10-27 | Phase 7 steps 3 and 5 done (5 built before 4). New SealedSecret `auth-jwt` (`JWT_PRIVATE_KEY`, Ed25519) wired into the auth app container; `jwks.json` is live (`kid` = RFC 7638 thumbprint, cached 5 min). Rotation procedure in `ARCHITECTURE.md` 5.1. Step 4 (verify + register) next. |

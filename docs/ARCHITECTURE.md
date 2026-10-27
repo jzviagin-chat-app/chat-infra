@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-26.
+Last updated: 2026-10-27.
 
 ---
 
@@ -60,9 +60,9 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Owns: users, devices, SMS codes, refresh tokens, signing keys. Database `auth` on Postgres (user `auth`).
 - Planned API: `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/token/refresh`,
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
-  Live today: `GET /healthz`, `GET /auth/healthz`.
+  Live today: `GET /healthz`, `GET /auth/healthz`, `POST /auth/otp/request`, `GET /auth/.well-known/jwks.json`.
 - Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes),
-  `GLOBALSMS_API_KEY` from Secret `auth-sms`, `SMS_PROVIDER=globalsms` and
+  `GLOBALSMS_API_KEY` from Secret `auth-sms`, `JWT_PRIVATE_KEY` from Secret `auth-jwt`, `SMS_PROVIDER=globalsms` and
   `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
   `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
 - External dependency: **Global SMS** (Israeli SMS provider, prepaid) sends the login codes, via
@@ -95,9 +95,14 @@ keep the old behaviour working until every consumer is updated.
 ### 5.1 Identity and tokens (auth-service → everyone)
 - **IDs:** users and devices have **UUIDv7** ids (strings in JSON).
 - **Access token:** JWT signed **EdDSA (Ed25519)**, valid **15 minutes**, sent as `Authorization: Bearer <token>`.
-  Header has `kid`. Claims: `iss="auth-service"`, `sub=<user_id>`, `did=<device_id>`, `iat`, `exp`, `jti`.
-- **Public keys:** `GET /auth/.well-known/jwks.json` (in the cluster: `http://auth:8000/auth/.well-known/jwks.json`).
-  Consumers fetch and cache it; on an unknown `kid`, refetch once. It holds the current and previous key.
+  Header has `kid` = the RFC 7638 thumbprint of the Ed25519 public key.
+  Claims: `iss="auth-service"`, `sub=<user_id>`, `did=<device_id>`, `iat`, `exp`, `jti`.
+- **Public keys (live):** `GET /auth/.well-known/jwks.json` (in the cluster: `http://auth:8000/auth/.well-known/jwks.json`),
+  served with `Cache-Control: public, max-age=300`. Consumers fetch and cache it; on an unknown `kid`, refetch once.
+  It holds the current key, plus the previous one during a rotation.
+- **Key rotation:** put the new private key in `JWT_PRIVATE_KEY` and the old public key in `JWT_PREVIOUS_PUBLIC_KEY`
+  (both in Secret `auth-jwt`), deploy; remove `JWT_PREVIOUS_PUBLIC_KEY` 20 minutes after the deploy
+  (15 min token lifetime + 5 min JWKS cache).
 - **Refresh token:** opaque, only for `POST /auth/token/refresh`; never sent to other services.
 - **Revocation:** a signed-out device's access token stays valid up to 15 min. chat-service additionally
   checks a Redis set of revoked device ids when a socket connects (planned).
@@ -141,6 +146,7 @@ keep the old behaviour working until every consumer is updated.
 | `auth-db` | default | `DATABASE_URL` | auth-service |
 | `auth-otp` | default | `OTP_PEPPER` (32 random bytes, hex) | auth-service: codes are stored as HMAC-SHA256(pepper, phone:code) |
 | `auth-sms` | default | `SMS_API_KEY` (Global SMS API key) | auth-service: sending SMS codes (env `GLOBALSMS_API_KEY`) |
+| `auth-jwt` | default | `JWT_PRIVATE_KEY` (Ed25519, PEM PKCS#8) (+ `JWT_PREVIOUS_PUBLIC_KEY` during rotation) | auth-service: signs access tokens |
 | `chat-db` | default | `CASSANDRA_USERNAME`, `CASSANDRA_PASSWORD` | chat-service (phase 9) |
 | `postgres-credentials` | database | `POSTGRES_PASSWORD`, `AUTH_DB_PASSWORD` | Postgres, backup job |
 | `cassandra-credentials` | chat-db | `ADMIN_PASSWORD`, `CHAT_APP_PASSWORD` | Cassandra setup/backup |
