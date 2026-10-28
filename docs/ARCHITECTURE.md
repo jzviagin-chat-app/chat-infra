@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-28.
 
 ---
 
@@ -94,6 +94,9 @@ keep the old behaviour working until every consumer is updated.
 
 ### 5.1 Identity and tokens (auth-service → everyone)
 - **IDs:** users and devices have **UUIDv7** ids (strings in JSON).
+- **Devices (WhatsApp model):** one **primary** device per user (a phone, logged in by SMS; a new SMS login
+  revokes the old primary) and, later, up to 4 **linked** devices added by QR from the primary. Every device has
+  its own `did`; a revoked device's tokens stop working as described under Revocation. Details: `PLAN.md` section 6.
 - **Access token:** JWT signed **EdDSA (Ed25519)**, valid **15 minutes**, sent as `Authorization: Bearer <token>`.
   Header has `kid` = the RFC 7638 thumbprint of the Ed25519 public key.
   Claims: `iss="auth-service"`, `sub=<user_id>`, `did=<device_id>`, `iat`, `exp`, `jti`.

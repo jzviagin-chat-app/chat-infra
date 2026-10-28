@@ -255,7 +255,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
   long JWT (unrevocable).
 - **Tables (migration 0001):** `users` (id UUIDv7, phone_e164 unique, display_name, avatar_key, status,
   created_at), `devices` (id, user_id → users ON DELETE CASCADE, platform, name, created_at, last_seen_at,
-  revoked_at), `otp_challenges` (keyed by phone, not user: a code is sent before the user exists; code
+  revoked_at; `role` added in step 4), `otp_challenges` (keyed by phone, not user: a code is sent before the user exists; code
   HMAC only). Hard delete of users. Profile picture = object-storage **key**; clients get short-lived signed
   URLs. Old OTP rows deleted after 24 h by a cleanup job. Later tables: `refresh_tokens`, `sms_daily_usage`
   (global SMS cap in Postgres, not Redis), `device_links` (QR linking).
@@ -266,10 +266,27 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 - **Signup / login with SMS OTP:**
   - phone → OTP → verify → account + device registration.
   - Codes are hashed, short-lived (≈5 min), max ~5 attempts.
-- **SMS provider:** Twilio, prepaid through **PayPal only** (no credit card). Hard spending protection:
-  - Auto-recharge **off**, and the PayPal automatic-payment authorisation cancelled after topping up.
-  - SMS geo permissions: **Israel only**.
-  - A global daily SMS cap in our code, plus per-phone and per-IP rate limits. Decided 2026-10-21:
+- **Devices: the WhatsApp model** (decided 2026-10-28):
+  - **One primary device per user: a phone, logged in by SMS.** `otp/verify` accepts only `platform` `ios` /
+    `android`. A new SMS login **replaces** the primary: in one transaction the old primary device is revoked
+    (with its refresh tokens) and the new one created. A re-login on the same phone is the same case.
+    Why: whoever obtains an SMS code (SIM swap, phishing) can log in; replacing the primary signs the real
+    owner out at once, so the takeover is noticed instead of an extra device silently reading along.
+  - **Up to 4 linked devices** (phone, tablet or browser: the type doesn't matter), added **only by QR** from
+    the primary (phase 7 step 10). No SMS login for them.
+  - Prepared in step 4: `devices.role` (`primary` / `linked`), with a partial unique index allowing one
+    active (`revoked_at IS NULL`) `primary` per user, so two simultaneous SMS logins can't both win.
+    Revoked devices are deleted after ~30 days by the cleanup job.
+  - `last_seen_at`: set at login and on every token refresh (step 6, about every 15 min while the app is used);
+    not on every API call (chat-service never writes auth's database).
+  - Open until step 10: whether a new primary login also signs out the linked devices (WhatsApp keeps them,
+    but signs them out after 14 days without the phone).
+- **SMS provider: Global SMS** (Israeli, prepaid packages in shekels, no stored card; chosen 2026-10-25 over
+  Twilio at ~$0.26/SMS). API host `sapi.itnewsletter.co.il` (no IP allow-list: the API key alone authorizes
+  sending), key in Secret `auth-sms`, sender name pre-approved in the account. Israeli numbers only (`+972`).
+  Selected by `SMS_PROVIDER=globalsms`; `fake` in development and CI. Spending protection:
+  - Prepaid credit only: we can never spend more than what was bought.
+  - A global daily SMS cap in our code (`GLOBALSMS_DAILY_CAP`, default 100), plus per-phone and per-IP rate limits. Decided 2026-10-21:
     per-phone / per-IP counters in **Redis** (atomic `INCR` + expiry; a flood is rejected without touching
     Postgres; losing them on a Redis restart is acceptable). The global daily cap in **Postgres**
     (`sms_daily_usage`, one atomic `UPDATE … SET sent = sent + 1 WHERE … sent < cap RETURNING`): it guards
@@ -343,12 +360,15 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 2. ✅ First tables (`users`, `devices`, `otp_challenges`) + migration 0001 + DB tests in CI
    (auth-service PR #2) + `migrate` init container and `DATABASE_URL` in `k8s/auth.yaml` (chat-infra). Deployed 2026-10-19: tables created in the cluster by the `migrate` init container.
 3. ✅ `POST /auth/otp/request` with a fake SMS sender (₪0) + rate limits + daily SMS cap + OTP cleanup job.
-4. Next: `POST /auth/otp/verify` → user + device, Telegram-like (verify + register).
+4. Next: `POST /auth/otp/verify` → user + primary device (WhatsApp model, section 6), Telegram-like registration
+   (a new phone gets a registration token and must send a display name before the user exists).
 5. ✅ (built before step 4) Signing keys (SealedSecret) + access tokens + `jwks.json`.
 6. Refresh tokens: issue, rotate, reuse detection, logout, devices list/remove.
 7. Tracing (OpenTelemetry → Tempo) + metrics.
 8. Dummy Expo app against it (phase 8).
-9. Real SMS provider behind a flag, with all cost guards (only when the owner decides).
+9. ✅ Real SMS provider behind a flag (`SMS_PROVIDER`), with all cost guards: Global SMS, live since 2026-10-26.
+10. Linking devices by QR (after step 6, needs the primary's access token): up to 4 linked devices, design in
+    section 8 "Later" → moved here.
 
 ### Phase 8: Dummy Expo app
 - Phone entry → OTP → token storage (secure store) → a "hello" screen that calls an authenticated endpoint.
@@ -372,11 +392,12 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 - Redpanda commit log, fan-out and push workers.
 - Groups (fan-out through `conversation_members`).
 - Multi-device sync.
-- **Linking secondary devices by QR code** (WhatsApp-style; design notes, not scheduled): the new device calls
+- **Linking devices by QR code** (now planned as phase 7 step 10; design notes): the new device calls
   `POST /auth/link/start` and shows a QR with a short-lived single-use pairing token (later also its public
   key); the signed-in phone scans it and calls `POST /auth/link/approve`; the server creates the device and
   the new device receives its tokens (long-poll/poll). No SMS cost, approval comes from a trusted device,
-  fits E2E key sharing. Needs a `device_links` table and probably `devices.linked_by_device_id`.
+  fits E2E key sharing. Needs a `device_links` table and probably `devices.linked_by_device_id`;
+  new devices get `role = linked`; max 4 active linked devices per user.
 - **Profile pictures:** upload to object storage (private bucket), store the key in `users.avatar_key`,
   serve via short-lived signed URLs (media service or auth-service).
 - E2E encryption (Signal-protocol style; server stores ciphertext only).
@@ -406,3 +427,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-25 | SMS provider: Global SMS (Israeli, prepaid packages) instead of Twilio (~$0.26/SMS). New SealedSecret `auth-sms` (`SMS_API_KEY`); not used by pods yet. A test call from home got 403, probably an IP allowlist on the key: provider setup (and the cluster's outgoing IP) still to finish. |
 | 2026-10-26 | Real SMS is live via Global SMS: `k8s/auth.yaml` sets `SMS_PROVIDER=globalsms` and `GLOBALSMS_API_KEY` (Secret `auth-sms`). auth-service uses the `sapi.itnewsletter.co.il` host, which isn't IP-restricted, so no allow-list for the cluster is needed (the 403 of 2026-10-25 was the IP-restricted `api` host). |
 | 2026-10-27 | Phase 7 steps 3 and 5 done (5 built before 4). New SealedSecret `auth-jwt` (`JWT_PRIVATE_KEY`, Ed25519) wired into the auth app container; `jwks.json` is live (`kid` = RFC 7638 thumbprint, cached 5 min). Rotation procedure in `ARCHITECTURE.md` 5.1. Step 4 (verify + register) next. |
+| 2026-10-28 | Device model decided: WhatsApp-style. One primary phone per user logs in by SMS (a new SMS login replaces it); up to 4 linked devices only by QR (phase 7 step 10, after refresh tokens). Step 4 prepares `devices.role` + one-active-primary unique index, accepts only `ios`/`android` for SMS login, and the cleanup job deletes revoked devices after ~30 days. Section 6 SMS provider text updated (Global SMS, not Twilio); step 9 ✅. |
