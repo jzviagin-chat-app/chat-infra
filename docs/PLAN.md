@@ -315,7 +315,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: steps 1–3 and 5 ✅, step 4 next |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–5 and 9 ✅, step 6 (refresh tokens) next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -360,10 +360,10 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 2. ✅ First tables (`users`, `devices`, `otp_challenges`) + migration 0001 + DB tests in CI
    (auth-service PR #2) + `migrate` init container and `DATABASE_URL` in `k8s/auth.yaml` (chat-infra). Deployed 2026-10-19: tables created in the cluster by the `migrate` init container.
 3. ✅ `POST /auth/otp/request` with a fake SMS sender (₪0) + rate limits + daily SMS cap + OTP cleanup job.
-4. Next: `POST /auth/otp/verify` → user + primary device (WhatsApp model, section 6), Telegram-like registration
+4. ✅ (deployed 2026-10-29) `POST /auth/otp/verify` → user + primary device (WhatsApp model, section 6), Telegram-like registration
    (a new phone gets a registration token and must send a display name before the user exists).
 5. ✅ (built before step 4) Signing keys (SealedSecret) + access tokens + `jwks.json`.
-6. Refresh tokens: issue, rotate, reuse detection, logout, devices list/remove.
+6. Next: Refresh tokens: issue, rotate, reuse detection, logout, devices list/remove.
 7. Tracing (OpenTelemetry → Tempo) + metrics.
 8. Dummy Expo app against it (phase 8).
 9. ✅ Real SMS provider behind a flag (`SMS_PROVIDER`), with all cost guards: Global SMS, live since 2026-10-26.
@@ -428,3 +428,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-26 | Real SMS is live via Global SMS: `k8s/auth.yaml` sets `SMS_PROVIDER=globalsms` and `GLOBALSMS_API_KEY` (Secret `auth-sms`). auth-service uses the `sapi.itnewsletter.co.il` host, which isn't IP-restricted, so no allow-list for the cluster is needed (the 403 of 2026-10-25 was the IP-restricted `api` host). |
 | 2026-10-27 | Phase 7 steps 3 and 5 done (5 built before 4). New SealedSecret `auth-jwt` (`JWT_PRIVATE_KEY`, Ed25519) wired into the auth app container; `jwks.json` is live (`kid` = RFC 7638 thumbprint, cached 5 min). Rotation procedure in `ARCHITECTURE.md` 5.1. Step 4 (verify + register) next. |
 | 2026-10-28 | Device model decided: WhatsApp-style. One primary phone per user logs in by SMS (a new SMS login replaces it); up to 4 linked devices only by QR (phase 7 step 10, after refresh tokens). Step 4 prepares `devices.role` + one-active-primary unique index, accepts only `ios`/`android` for SMS login, and the cleanup job deletes revoked devices after ~30 days. Section 6 SMS provider text updated (Global SMS, not Twilio); step 9 ✅. |
+| 2026-10-29 | Phase 7 step 4 done: otp/verify + register (Telegram-like registration token), WhatsApp primary-device model live (migrations 0003, 0004). Deploy job's `INFRA_REPO_TOKEN` had expired and was replaced. |
