@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-28.
+Last updated: 2026-10-29.
 
 ---
 
@@ -13,7 +13,7 @@ Last updated: 2026-10-28.
 | Repo | What | Status |
 |---|---|---|
 | `chat-infra` | Terraform (Oracle Cloud), Kubernetes manifests (`k8s/`, deployed by Argo CD), hand-run jobs (`manual/`), **all system docs (`docs/`)** | live |
-| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | deployed: skeleton + tables (`users`, `devices`, `otp_challenges`); no feature endpoints yet |
+| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`, `jwks.json`); refresh tokens next |
 | `chat-service` | WebSocket messaging. Will use the same stack as auth-service | placeholder (echo server) |
 | mobile app (later) | Expo / React Native + TypeScript | not started |
 
@@ -60,7 +60,8 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Owns: users, devices, SMS codes, refresh tokens, signing keys. Database `auth` on Postgres (user `auth`).
 - Planned API: `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/token/refresh`,
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
-  Live today: `GET /healthz`, `GET /auth/healthz`, `POST /auth/otp/request`, `GET /auth/.well-known/jwks.json`.
+  Live today: `GET /healthz`, `GET /auth/healthz`, `POST /auth/otp/request`,
+  `POST /auth/otp/verify` (platform `ios`/`android` only), `POST /auth/register`, `GET /auth/.well-known/jwks.json`.
 - Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes),
   `GLOBALSMS_API_KEY` from Secret `auth-sms`, `JWT_PRIVATE_KEY` from Secret `auth-jwt`, `SMS_PROVIDER=globalsms` and
   `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
@@ -78,7 +79,7 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 
 | Store | Address in the cluster | Owner | Contents |
 |---|---|---|---|
-| Postgres 17 | `postgres.database.svc.cluster.local:5432`, db `auth` | auth-service | `users`, `devices`, `otp_challenges` (migration 0001); later `refresh_tokens`, `sms_daily_usage`, `device_links` |
+| Postgres 17 | `postgres.database.svc.cluster.local:5432`, db `auth` | auth-service | live: `users`, `devices` (+ `role` `primary`/`linked`, one active primary per user by a partial unique index: migration 0004), `otp_challenges` (+ registration-token columns: 0003), `sms_daily_usage` (0002); later `refresh_tokens`, `device_links` |
 | Cassandra 5.0.9 | `cassandra.chat-db.svc.cluster.local:9042`, keyspace `chat` | chat-service | `inbox_by_device`, `device_inbox_seq`, `messages_by_conversation`, `conversation_seq`, `user_conversations`, `conversation_members`, `devices_by_user` |
 | Redis 7.4 | `redis://redis:6379` (namespace default): db `0` chat, db `1` auth | chat-service (db 0), auth-service (db 1) | only rebuildable state: chat's connection registry and pub/sub; auth's per-phone / per-IP rate-limit counters (keys `auth:rl:…`) |
 | Object storage | `https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com` | infra | `chat-logs` (Loki), `chat-traces` (Tempo), `chat-backups` (`postgres/`, `cassandra/`); later media |
