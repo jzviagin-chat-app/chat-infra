@@ -249,16 +249,20 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
   Async rules: only async libraries inside `async def`; blocking work via `asyncio.to_thread`; scale with pods.
 - **Layers:** `api/` (HTTP only) → `services/` (business rules) → `db/` (models + repos). Dependencies point down.
 - **Sessions:** short JWT access token (15 min, **EdDSA/Ed25519**, claims `iss`, `sub`=user, `did`=device,
-  `iat`, `exp`, `jti`, `kid`) + opaque refresh token (60 days, SHA-256 hash stored, rotated on every use,
-  reuse ⇒ revoke the device's chain). Sent in headers (mobile: secure storage); web later: refresh token in an
+  `iat`, `exp`, `jti`, `kid`) + opaque refresh token (60 days, SHA-256 hash stored, rotated on every use;
+  the device is the chain (every login is a new device), so reuse ⇒ the device is signed out. A lost reply
+  never logs anyone out: retrying with the current token issues another waiting token (details: auth-service
+  README §7)). Sent in headers (mobile: secure storage); web later: refresh token in an
   HttpOnly SameSite=Strict cookie scoped to the refresh path. Not server sessions (shared store), not one
   long JWT (unrevocable).
 - **Tables (migration 0001):** `users` (id UUIDv7, phone_e164 unique, display_name, avatar_key, status,
   created_at), `devices` (id, user_id → users ON DELETE CASCADE, platform, name, created_at, last_seen_at,
   revoked_at; `role` added in step 4), `otp_challenges` (keyed by phone, not user: a code is sent before the user exists; code
   HMAC only). Hard delete of users. Profile picture = object-storage **key**; clients get short-lived signed
-  URLs. Old OTP rows deleted after 24 h by a cleanup job. Later tables: `refresh_tokens`, `sms_daily_usage`
-  (global SMS cap in Postgres, not Redis), `device_links` (QR linking).
+  URLs. Old OTP rows deleted after 24 h by a cleanup job. Added since: `sms_daily_usage` (0002; global SMS cap
+  in Postgres, not Redis), `refresh_tokens` (0005: `id, device_id, token_hash, created_at, expires_at,
+  used_at, discarded_at`; discarded tokens deleted after 7 days, expired ones at expiry). Later tables:
+  `device_links` (QR linking).
 - **Migrations in the cluster:** an init container runs `alembic upgrade head` before the app starts
   (advisory lock so concurrent pods don't collide; connection retry for the NetworkPolicy delay).
   Migrations must stay compatible with the previous app version (rolling deploys).
@@ -277,8 +281,8 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
   - Prepared in step 4: `devices.role` (`primary` / `linked`), with a partial unique index allowing one
     active (`revoked_at IS NULL`) `primary` per user, so two simultaneous SMS logins can't both win.
     Revoked devices are deleted after ~30 days by the cleanup job.
-  - `last_seen_at`: set at login and on every token refresh (step 6, about every 15 min while the app is used);
-    not on every API call (chat-service never writes auth's database).
+  - `last_seen_at`: set at login and on every token refresh (about every 15 min while the app is used).
+    Not chat's "last seen" presence, which chat-service will own.
   - Open until step 10: whether a new primary login also signs out the linked devices (WhatsApp keeps them,
     but signs them out after 14 days without the phone).
 - **SMS provider: Global SMS** (Israeli, prepaid packages in shekels, no stored card; chosen 2026-10-25 over
@@ -295,7 +299,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
   - **Development: a fake SMS sender** that logs a masked notice, with the code readable only in dev. Costs ₪0.
 - **Tokens:**
   - Short-lived access JWT (≈15 min), signed with an asymmetric key. Public keys are published at `/auth/.well-known/jwks.json`, so chat-service verifies locally.
-  - Refresh tokens are opaque and stored hashed. They **rotate on every use**, and reuse revokes the whole family.
+  - Refresh tokens are opaque and stored hashed. They **rotate on every use**, and reuse signs the device out.
 - **Device keypair:** each device generates a keypair and registers its public key. This is the base for E2E and multi-device later.
 - **Observability:** JSON logs with `trace_id`, OpenTelemetry traces to Alloy, Prometheus metrics. Phone numbers are always masked in logs.
 - **Later:** device attestation (Play Integrity / App Attest) against SMS pumping.
@@ -315,7 +319,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: steps 1–5 and 9 ✅, step 6 (refresh tokens) next |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–5 and 9 ✅, step 6a (refresh tokens) ✅, 6b (logout, devices list/remove) next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -363,7 +367,8 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 4. ✅ (deployed 2026-10-29) `POST /auth/otp/verify` → user + primary device (WhatsApp model, section 6), Telegram-like registration
    (a new phone gets a registration token and must send a display name before the user exists).
 5. ✅ (built before step 4) Signing keys (SealedSecret) + access tokens + `jwks.json`.
-6. Next: Refresh tokens: issue, rotate, reuse detection, logout, devices list/remove.
+6. Refresh tokens: 6a ✅ issue at login, rotate, lost-reply retries, reuse detection
+   (`POST /auth/token/refresh`); 6b next: logout, devices list/remove.
 7. Tracing (OpenTelemetry → Tempo) + metrics.
 8. Dummy Expo app against it (phase 8).
 9. ✅ Real SMS provider behind a flag (`SMS_PROVIDER`), with all cost guards: Global SMS, live since 2026-10-26.
@@ -382,6 +387,13 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 - Fill `devices_by_user` when a device connects with a valid token. Retry the first Cassandra connection
   (new pods are blocked for a few seconds).
 - Client side: SQLite store, cursor, cumulative acks.
+
+### Open issues
+- **Token refresh during active chats (to discuss before phase 9):** what chat-service does when the access
+  token of an open WebSocket expires. Ideas only, not decided: check expiry on send, on delivery and on
+  heartbeat; ask for a new token on the same socket (`auth_required`) and pause delivery (messages wait in the
+  inbox) instead of closing; close only after a grace period (~30 s) without a valid token. References: Apache
+  Pulsar PIP-292 (auth challenge on the open connection), Ably (renewal without disconnect, 30 s margin).
 
 ---
 
@@ -429,3 +441,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-27 | Phase 7 steps 3 and 5 done (5 built before 4). New SealedSecret `auth-jwt` (`JWT_PRIVATE_KEY`, Ed25519) wired into the auth app container; `jwks.json` is live (`kid` = RFC 7638 thumbprint, cached 5 min). Rotation procedure in `ARCHITECTURE.md` 5.1. Step 4 (verify + register) next. |
 | 2026-10-28 | Device model decided: WhatsApp-style. One primary phone per user logs in by SMS (a new SMS login replaces it); up to 4 linked devices only by QR (phase 7 step 10, after refresh tokens). Step 4 prepares `devices.role` + one-active-primary unique index, accepts only `ios`/`android` for SMS login, and the cleanup job deletes revoked devices after ~30 days. Section 6 SMS provider text updated (Global SMS, not Twilio); step 9 ✅. |
 | 2026-10-29 | Phase 7 step 4 done: otp/verify + register (Telegram-like registration token), WhatsApp primary-device model live (migrations 0003, 0004). Deploy job's `INFRA_REPO_TOKEN` had expired and was replaced. |
+| 2026-10-30 | Phase 7 step 6a: refresh tokens (`refresh_tokens`, migration 0005; `POST /auth/token/refresh`). The device is the chain; lost replies retry safely; a reused replaced token signs the device out. Open issue recorded: token refresh on open WebSockets (phase 9). (auth-service) |
