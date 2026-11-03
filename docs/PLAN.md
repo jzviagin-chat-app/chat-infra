@@ -283,8 +283,15 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
     Revoked devices are deleted after ~30 days by the cleanup job.
   - `last_seen_at`: set at login and on every token refresh (about every 15 min while the app is used).
     Not chat's "last seen" presence, which chat-service will own.
-  - Open until step 10: whether a new primary login also signs out the linked devices (WhatsApp keeps them,
-    but signs them out after 14 days without the phone).
+  - Managing devices (decided 2026-11-01): only the primary lists devices (`GET /auth/devices`, active ones
+    only) and removes linked ones (`DELETE /auth/devices/{id}`); a linked device can only log itself out; the
+    primary leaves only by logout or a new SMS login. Logout always answers 204 (also when already signed out).
+  - Revoked devices are published in Redis db 2 for chat-service (`ARCHITECTURE.md` §5.1). Redis db 2 is a new
+    db for keys shared between services (decided 2026-11-01); moving to Redis Cluster later means merging all
+    dbs into db 0 with key prefixes.
+  - Open until step 10: whether a new primary login, or a primary logout, also signs out the linked devices
+    (WhatsApp reportedly ends linked sessions when the number is registered on a new phone; a primary logout
+    is undocumented).
 - **SMS provider: Global SMS** (Israeli, prepaid packages in shekels, no stored card; chosen 2026-10-25 over
   Twilio at ~$0.26/SMS). API host `sapi.itnewsletter.co.il` (no IP allow-list: the API key alone authorizes
   sending), key in Secret `auth-sms`, sender name pre-approved in the account. Israeli numbers only (`+972`).
@@ -319,7 +326,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: steps 1–5 and 9 ✅, step 6a (refresh tokens) ✅, 6b (logout, devices list/remove) next |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–6 and 9 ✅, step 7 (tracing + metrics) next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -367,9 +374,9 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 4. ✅ (deployed 2026-10-29) `POST /auth/otp/verify` → user + primary device (WhatsApp model, section 6), Telegram-like registration
    (a new phone gets a registration token and must send a display name before the user exists).
 5. ✅ (built before step 4) Signing keys (SealedSecret) + access tokens + `jwks.json`.
-6. Refresh tokens: 6a ✅ issue at login, rotate, lost-reply retries, reuse detection
-   (`POST /auth/token/refresh`); 6b next: logout, devices list/remove.
-7. Tracing (OpenTelemetry → Tempo) + metrics.
+6. ✅ Refresh tokens: 6a issue at login, rotate, lost-reply retries, reuse detection
+   (`POST /auth/token/refresh`); 6b logout, devices list/remove, revoked devices in Redis db 2.
+7. Next: Tracing (OpenTelemetry → Tempo) + metrics.
 8. Dummy Expo app against it (phase 8).
 9. ✅ Real SMS provider behind a flag (`SMS_PROVIDER`), with all cost guards: Global SMS, live since 2026-10-26.
 10. Linking devices by QR (after step 6, needs the primary's access token): up to 4 linked devices, design in
@@ -394,6 +401,8 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
   heartbeat; ask for a new token on the same socket (`auth_required`) and pause delivery (messages wait in the
   inbox) instead of closing; close only after a grace period (~30 s) without a valid token. References: Apache
   Pulsar PIP-292 (auth challenge on the open connection), Ably (renewal without disconnect, 30 s margin).
+  The owner prefers checking the revoked key on every message (not only when a token arrives); decide with the
+  rest in phase 9.
 
 ---
 
@@ -442,3 +451,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-28 | Device model decided: WhatsApp-style. One primary phone per user logs in by SMS (a new SMS login replaces it); up to 4 linked devices only by QR (phase 7 step 10, after refresh tokens). Step 4 prepares `devices.role` + one-active-primary unique index, accepts only `ios`/`android` for SMS login, and the cleanup job deletes revoked devices after ~30 days. Section 6 SMS provider text updated (Global SMS, not Twilio); step 9 ✅. |
 | 2026-10-29 | Phase 7 step 4 done: otp/verify + register (Telegram-like registration token), WhatsApp primary-device model live (migrations 0003, 0004). Deploy job's `INFRA_REPO_TOKEN` had expired and was replaced. |
 | 2026-10-30 | Phase 7 step 6a: refresh tokens (`refresh_tokens`, migration 0005; `POST /auth/token/refresh`). The device is the chain; lost replies retry safely; a reused replaced token signs the device out. Open issue recorded: token refresh on open WebSockets (phase 9). (auth-service) |
+| 2026-11-02 | Phase 7 step 6b: `POST /auth/logout`, `GET/DELETE /auth/devices` (WhatsApp model: only the primary manages devices). Revoked devices published in a new Redis db 2 shared by the services (`revoked:device:<id>`, 17 min; marker `revoked:synced`), rewritten every minute by auth; chat-service reads it and accepts on a Redis outage. `k8s/auth.yaml`: `SHARED_REDIS_URL`. (auth-service, chat-infra) |

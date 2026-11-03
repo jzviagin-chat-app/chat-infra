@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-10-30.
+Last updated: 2026-11-03.
 
 ---
 
@@ -13,7 +13,7 @@ Last updated: 2026-10-30.
 | Repo | What | Status |
 |---|---|---|
 | `chat-infra` | Terraform (Oracle Cloud), Kubernetes manifests (`k8s/`, deployed by Argo CD), hand-run jobs (`manual/`), **all system docs (`docs/`)** | live |
-| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`, `token/refresh`, `jwks.json`); logout + devices list next |
+| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`), sessions (`token/refresh`, `logout`, `devices`), `jwks.json`; tracing next |
 | `chat-service` | WebSocket messaging. Will use the same stack as auth-service | placeholder (echo server) |
 | mobile app (later) | Expo / React Native + TypeScript | not started |
 
@@ -62,10 +62,11 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
   `POST /auth/logout`, `GET/DELETE /auth/devices`, `GET /auth/.well-known/jwks.json`.
   Live today: `GET /healthz`, `GET /auth/healthz`, `POST /auth/otp/request`,
   `POST /auth/otp/verify` (platform `ios`/`android` only), `POST /auth/register`, `POST /auth/token/refresh`,
-  `GET /auth/.well-known/jwks.json`.
+  `POST /auth/logout`, `GET /auth/devices`, `DELETE /auth/devices/{id}`, `GET /auth/.well-known/jwks.json`.
 - Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes),
   `GLOBALSMS_API_KEY` from Secret `auth-sms`, `JWT_PRIVATE_KEY` from Secret `auth-jwt`, `SMS_PROVIDER=globalsms` and
-  `REDIS_URL=redis://redis:6379/1` (rate limits). Migrations: Alembic, run by the `migrate` init container in
+  `REDIS_URL=redis://redis:6379/1` (rate limits),
+  `SHARED_REDIS_URL=redis://redis:6379/2` (revoked devices for chat-service). Migrations: Alembic, run by the `migrate` init container in
   `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
 - External dependency: **Global SMS** (Israeli SMS provider, prepaid) sends the login codes, via
   `https://sapi.itnewsletter.co.il` (the `sapi` host has no IP allow-list: the API key alone authorizes sending).
@@ -82,7 +83,7 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 |---|---|---|---|
 | Postgres 17 | `postgres.database.svc.cluster.local:5432`, db `auth` | auth-service | live: `users`, `devices` (+ `role` `primary`/`linked`, one active primary per user by a partial unique index: migration 0004), `otp_challenges` (+ registration-token columns: 0003), `sms_daily_usage` (0002), `refresh_tokens` (migration 0005); later `device_links` |
 | Cassandra 5.0.9 | `cassandra.chat-db.svc.cluster.local:9042`, keyspace `chat` | chat-service | `inbox_by_device`, `device_inbox_seq`, `messages_by_conversation`, `conversation_seq`, `user_conversations`, `conversation_members`, `devices_by_user` |
-| Redis 7.4 | `redis://redis:6379` (namespace default): db `0` chat, db `1` auth | chat-service (db 0), auth-service (db 1) | only rebuildable state: chat's connection registry and pub/sub; auth's per-phone / per-IP rate-limit counters (keys `auth:rl:…`) |
+| Redis 7.4 | `redis://redis:6379` (namespace default): db `0` chat, `1` auth, `2` shared between services | chat-service (db 0), auth-service (db 1), shared (db 2: written by auth-service, read by chat-service) | only rebuildable state: chat's connection registry and pub/sub; auth's per-phone / per-IP rate-limit counters (keys `auth:rl:…`); db 2: revoked devices (`revoked:device:<id>`, `revoked:synced`) |
 | Object storage | `https://axmmbljjebqv.compat.objectstorage.il-jerusalem-1.oraclecloud.com` | infra | `chat-logs` (Loki), `chat-traces` (Tempo), `chat-backups` (`postgres/`, `cassandra/`); later media |
 
 Network rules: Redis accepts only pods `app=chat` and `app=auth`. Postgres accepts only pods `app=auth`
@@ -111,15 +112,25 @@ keep the old behaviour working until every consumer is updated.
 - **Refresh token:** opaque, only for `POST /auth/token/refresh`; never sent to other services.
   Lifetime 60 days from the last refresh; rotated on every use; the device is the chain (a reused replaced
   token signs the device out).
-- **Revocation:** a signed-out device's access token stays valid up to 15 min. chat-service additionally
-  checks a Redis set of revoked device ids when a socket connects (planned).
+- **Revocation:** a device is signed out (`devices.revoked_at`) by logout, by the primary removing a linked
+  device, by a new SMS login replacing the primary, and by refresh-token reuse. Its refresh tokens stop at once;
+  auth-service refuses its access token at once (it checks Postgres). For chat-service, auth-service writes into
+  Redis db 2, after the Postgres commit:
+  - `revoked:device:<device_id>` = "1", expiring 17 min after the revocation (15 min token lifetime + 30 s
+    leeway + margin). Exists = refuse that device's tokens.
+  - `revoked:synced` = "1", rewritten by every auth pod each minute (expires after 3 min), together with the
+    keys of every device revoked in the last 17 min. Missing = Redis lost its data and the list may be incomplete.
+
+  auth-service only writes these keys; chat-service only reads them. Redis down or marker missing: chat-service
+  accepts the token (risk accepted by the owner, 2026-11-02).
 
 ### 5.2 WebSocket session (app ↔ chat-service)
 - Connect to `wss://<host>/ws`, then send `{"type":"auth","token":"<access token>"}` within 5 s, or the
   server closes the socket. Tokens never go in the URL (URLs end up in logs).
 - Before the token expires, the app sends a fresh `auth` message on the same socket.
-- **Open (decide in phase 9):** how chat-service enforces access-token expiry on an open socket. See `PLAN.md`
-  section 7, "Open issues".
+- chat-service checks `revoked:device:<did>` at least whenever it receives a token (socket connect, each fresh
+  `auth` message). **Open (decide in phase 9):** the owner prefers checking on every message; how expiry is
+  enforced on an open socket. See `PLAN.md` section 7, "Open issues".
 
 ### 5.3 Between chat-service instances (Redis)
 - `conn:<device_id>` → pod name of the instance holding that device's socket; TTL refreshed by heartbeat.
