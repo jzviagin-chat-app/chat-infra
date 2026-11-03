@@ -59,6 +59,8 @@ spec:
                   key: DATABASE_URL
             - name: REDIS_URL # rate-limit counters; db 1 keeps them apart from chat's db 0
               value: redis://redis:6379/1
+            - name: SHARED_REDIS_URL # db 2, shared between services: revoked devices for chat-service
+              value: redis://redis:6379/2
             - name: OTP_PEPPER # secret key for HMAC of SMS codes (only hashes are stored)
               valueFrom:
                 secretKeyRef:
