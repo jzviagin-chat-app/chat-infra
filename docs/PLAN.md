@@ -326,7 +326,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: steps 1–6 and 9 ✅, step 7 (tracing + metrics) next |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–6 and 9 ✅, step 7a (tracing) ✅, 7b (metrics) next |
 | 8 | Dummy Expo app (signup flow) | ⏳ |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
@@ -376,7 +376,8 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 5. ✅ (built before step 4) Signing keys (SealedSecret) + access tokens + `jwks.json`.
 6. ✅ Refresh tokens: 6a issue at login, rotate, lost-reply retries, reuse detection
    (`POST /auth/token/refresh`); 6b logout, devices list/remove, revoked devices in Redis db 2.
-7. Next: Tracing (OpenTelemetry → Tempo) + metrics.
+7. Observability: 7a ✅ tracing (OpenTelemetry -> Alloy -> Tempo, `trace_id` in logs);
+   7b next: metrics (`/metrics` scraped by Prometheus).
 8. Dummy Expo app against it (phase 8).
 9. ✅ Real SMS provider behind a flag (`SMS_PROVIDER`), with all cost guards: Global SMS, live since 2026-10-26.
 10. Linking devices by QR (after step 6, needs the primary's access token): up to 4 linked devices, design in
@@ -452,3 +453,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-10-29 | Phase 7 step 4 done: otp/verify + register (Telegram-like registration token), WhatsApp primary-device model live (migrations 0003, 0004). Deploy job's `INFRA_REPO_TOKEN` had expired and was replaced. |
 | 2026-10-30 | Phase 7 step 6a: refresh tokens (`refresh_tokens`, migration 0005; `POST /auth/token/refresh`). The device is the chain; lost replies retry safely; a reused replaced token signs the device out. Open issue recorded: token refresh on open WebSockets (phase 9). (auth-service) |
 | 2026-11-02 | Phase 7 step 6b: `POST /auth/logout`, `GET/DELETE /auth/devices` (WhatsApp model: only the primary manages devices). Revoked devices published in a new Redis db 2 shared by the services (`revoked:device:<id>`, 17 min; marker `revoked:synced`), rewritten every minute by auth; chat-service reads it and accepts on a Redis outage. `k8s/auth.yaml`: `SHARED_REDIS_URL`. (auth-service, chat-infra) |
+| 2026-11-03 | Phase 7 step 7a: auth-service traces every request with OpenTelemetry (FastAPI, SQLAlchemy, redis, httpx instrumentations) to Alloy -> Tempo; log lines carry `trace_id`. `k8s/auth.yaml`: `OTEL_EXPORTER_OTLP_ENDPOINT`. (auth-service, chat-infra) |
