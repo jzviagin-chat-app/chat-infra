@@ -44,11 +44,15 @@ node_memory_MemAvailable_bytes / 1e9                                free memory 
 kube_pod_container_status_restarts_total > 0                        restarting containers
 ```
 
-**Tempo:** "Search" tab, or click a `trace_id` in a log line. Empty until services send traces.
+**Tempo:** "Search" tab, or click a `trace_id` in a log line. auth-service sends traces: search
+`service.name = auth-service` (resource attributes: `service.name`, `k8s.pod.name`, `deployment.environment.name`).
 
 ## Logging rules for our services
 - One **JSON object per line** on stdout, with `level`, `msg` and, when inside a request, `trace_id`.
   Alloy turns `level` into a label and keeps `trace_id` as metadata linked to Tempo.
+- auth-service: log lines inside a request carry `trace_id` (+ `span_id`), so Grafana's Loki → Tempo link works
+  for them. Health checks are not traced. Background jobs (cleanup hourly, revoked-devices resync every minute)
+  are one trace per round, named `cleanup` / `revoked devices resync`.
 - **Never log** OTP codes, tokens, passwords or full phone numbers (mask them: `+97250***1234`).
 
 ## Free-tier guards

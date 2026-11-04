@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-11-03.
+Last updated: 2026-11-04.
 
 ---
 
@@ -66,7 +66,8 @@ Node labels: `role=lb`, `role=worker`, `role=ops`. Rule: **stateless app pods on
 - Gets `DATABASE_URL` from Secret `auth-db`, `OTP_PEPPER` from Secret `auth-otp` (HMAC key for SMS codes),
   `GLOBALSMS_API_KEY` from Secret `auth-sms`, `JWT_PRIVATE_KEY` from Secret `auth-jwt`, `SMS_PROVIDER=globalsms` and
   `REDIS_URL=redis://redis:6379/1` (rate limits),
-  `SHARED_REDIS_URL=redis://redis:6379/2` (revoked devices for chat-service). Migrations: Alembic, run by the `migrate` init container in
+  `SHARED_REDIS_URL=redis://redis:6379/2` (revoked devices for chat-service),
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy.observability.svc:4317` (traces). Migrations: Alembic, run by the `migrate` init container in
   `k8s/auth.yaml` (same image as the app) before the app starts, on every pod start (`DATABASE.md`).
 - External dependency: **Global SMS** (Israeli SMS provider, prepaid) sends the login codes, via
   `https://sapi.itnewsletter.co.il` (the `sapi` host has no IP allow-list: the API key alone authorizes sending).
@@ -150,10 +151,13 @@ keep the old behaviour working until every consumer is updated.
 
 - **Stack:** Python 3.14, uv, async FastAPI, Pydantic v2; ruff + mypy strict + pytest in CI.
   Async rule: no blocking calls inside `async def` (use async libraries, or `asyncio.to_thread`).
-- **Logs:** one JSON object per line on stdout: `ts`, `level`, `logger`, `msg`, `service`, `pod`, later `trace_id`.
+- **Logs:** one JSON object per line on stdout: `ts`, `level`, `logger`, `msg`, `service`, `pod`, and `trace_id`
+  (+ `span_id`) on lines written inside a request (live for auth-service).
   Alloy ships them to Loki (`{app="auth"} | json`). **Never log** OTP codes, tokens, passwords, full phone numbers.
-- **Traces:** OpenTelemetry to `alloy.observability.svc:4317` (gRPC) / `:4318` (HTTP); W3C `traceparent` is
-  propagated over HTTP, WebSocket and Redis messages (planned).
+- **Traces:** OpenTelemetry to `alloy.observability.svc:4317` (gRPC) / `:4318` (HTTP). auth-service sends
+  traces (live): one per request, with spans for each Postgres query, Redis command and outgoing HTTP call;
+  log lines inside a request carry `trace_id` and `span_id`. W3C `traceparent` propagation across services
+  (HTTP, WebSocket, Redis messages) stays planned (chat-service, phase 9).
 - **Startup:** retry the first database connection: k3s's NetworkPolicy firewall blocks a brand-new pod for a
   few seconds. Settings come from env vars; `ENVIRONMENT` defaults to `prod`.
 - **Secrets:** only from Kubernetes Secrets, committed as SealedSecrets (`SECRETS.md`); never in code or images.
