@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-05.
 
 ---
 
@@ -13,7 +13,7 @@ Last updated: 2026-11-04.
 | Repo | What | Status |
 |---|---|---|
 | `chat-infra` | Terraform (Oracle Cloud), Kubernetes manifests (`k8s/`, deployed by Argo CD), hand-run jobs (`manual/`), **all system docs (`docs/`)** | live |
-| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`), sessions (`token/refresh`, `logout`, `devices`), `jwks.json`; tracing next |
+| `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`), sessions (`token/refresh`, `logout`, `devices`), `jwks.json`; traces and metrics |
 | `chat-service` | WebSocket messaging. Will use the same stack as auth-service | placeholder (echo server) |
 | mobile app (later) | Expo / React Native + TypeScript | not started |
 
@@ -158,6 +158,10 @@ keep the old behaviour working until every consumer is updated.
   traces (live): one per request, with spans for each Postgres query, Redis command and outgoing HTTP call;
   log lines inside a request carry `trace_id` and `span_id`. W3C `traceparent` propagation across services
   (HTTP, WebSocket, Redis messages) stays planned (chat-service, phase 9).
+- **Metrics:** each service serves Prometheus metrics at `GET /metrics` (root path, not routed by the ingress)
+  and its pod template carries the `prometheus.io/scrape|port|path` annotations; Prometheus scrapes every 60 s.
+  Labels hold only fixed values (route template, status, outcome), never phone numbers, codes, tokens or ids.
+  Live for auth-service.
 - **Startup:** retry the first database connection: k3s's NetworkPolicy firewall blocks a brand-new pod for a
   few seconds. Settings come from env vars; `ENVIRONMENT` defaults to `prod`.
 - **Secrets:** only from Kubernetes Secrets, committed as SealedSecrets (`SECRETS.md`); never in code or images.
