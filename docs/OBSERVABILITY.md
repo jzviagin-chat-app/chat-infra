@@ -5,7 +5,7 @@ Logs, traces and metrics for every pod, viewed in Grafana.
 ```
 pods (stdout) ──► Alloy ──► Loki ──► bucket chat-logs     (7 days)
 services (OTLP traces) ──► Alloy :4317/:4318 ──► Tempo ──► bucket chat-traces (3 days)
-nodes, pods ◄── Prometheus (scrapes every 60 s, local disk, 7 days)
+nodes, pods (+ /metrics of annotated pods) ◄── Prometheus (scrapes every 60 s, local disk, 7 days)
                          Grafana ◄── reads all three (SSH tunnel only)
 ```
 
@@ -27,6 +27,14 @@ ssh -L 3000:localhost:3000 ubuntu@<lb_public_ip> \
 ```
 Then browse to http://localhost:3000 and log in with the admin user/password from your password manager.
 
+If it says `unable to listen on port 3000 ... address already in use`, an old port-forward still runs on the
+lb VM. Use another port there (your browser still opens http://localhost:3000):
+```bash
+ssh -L 3000:localhost:3001 ubuntu@<lb_public_ip> \
+  'kubectl -n observability port-forward svc/grafana 3001:80'
+```
+To stop the old one, on the lb VM: `pgrep -af port-forward`, then `kill <pid>`.
+
 ## Useful queries (Explore)
 
 **Loki**
@@ -42,7 +50,18 @@ Then browse to http://localhost:3000 and log in with the admin user/password fro
 sum by (node) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))     CPU per node
 node_memory_MemAvailable_bytes / 1e9                                free memory (GB)
 kube_pod_container_status_restarts_total > 0                        restarting containers
+
+sum by (route) (rate(http_requests_total{app="auth"}[5m]))          requests/s per route
+histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{app="auth"}[5m])))
+                                                                      p95 latency per route
+increase(auth_otp_requests_total[1d])                                OTP requests by outcome, last day
+increase(auth_sms_sent_total[1d])                                    SMS sent / failed by provider
+increase(auth_refresh_total{outcome="reused"}[1d])                   refresh-token reuse (theft signal)
+increase(auth_job_runs_total{result="error"}[1h])                    failing background loops
 ```
+auth-service metrics: `http_requests_total`, `http_request_duration_seconds`, `auth_otp_requests_total`,
+`auth_sms_sent_total`, `auth_logins_total`, `auth_refresh_total`, `auth_devices_revoked_total`,
+`auth_job_runs_total` (details: auth-service README §6).
 
 **Tempo:** "Search" tab, or click a `trace_id` in a log line. auth-service sends traces: search
 `service.name = auth-service` (resource attributes: `service.name`, `k8s.pod.name`, `deployment.environment.name`).
@@ -72,5 +91,8 @@ kubectl -n observability logs statefulset/loki --tail=50   # storage errors show
 kubectl -n observability logs statefulset/tempo --tail=50
 kubectl -n observability logs deploy/alloy --tail=50
 ```
+Prometheus targets: `kubectl -n observability port-forward svc/prometheus-server 9090:80` on the lb VM, then
+Status → Targets, job `kubernetes-pods`.
+
 `AccessDenied` / `SignatureDoesNotMatch` from Loki or Tempo: wrong key, endpoint or region in
 `observability-loki.yaml` / `observability-tempo.yaml`, or the observability user's policy.

@@ -11,6 +11,10 @@ spec:
     metadata:
       labels:
         app: auth
+      annotations: # Prometheus' kubernetes-pods job scrapes /metrics on every auth pod every 60 s
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
     spec:
       nodeSelector:
         role: worker # stateless, like chat: runs on the workers
