@@ -45,7 +45,7 @@ Update it whenever the plan changes, and push it in the same commit as the chang
 | `chat-infra` | Terraform (`terraform/`), Kubernetes manifests watched by Argo CD (`k8s/`, top level only, no subfolders), docs (`docs/`), Sealed Secrets public cert (`sealed-secrets/`) |
 | `chat-service` | WebSocket chat service (FastAPI) |
 | `auth-service` | Signup/login, OTP, JWT (FastAPI) |
-| *(later)* mobile app | Expo / React Native + TypeScript |
+| `mobile-app` | The phone app: Expo / React Native + TypeScript (phase 8) |
 | *(later)* `media-service` | Uploads for pictures, voice, video |
 
 ### Deploy pipeline (same for every service)
@@ -326,8 +326,8 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 4 | Observability: buckets + IAM user (Terraform), Loki, Tempo, Prometheus, Grafana, Alloy | ✅ done (verify objects appear in `chat-logs`; watch request counts) |
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
-| **7** | **Production auth-service** | 🔨 in progress: steps 1–7 and 9 ✅, step 8 (dummy Expo app) next |
-| 8 | Dummy Expo app (signup flow) | ⏳ |
+| **7** | **Production auth-service** | 🔨 in progress: steps 1–7 and 9 ✅; step 8 = phase 8 (mobile app), step 10 (QR linking) later |
+| **8** | **Mobile app foundation** (first feature: login) | 🔨 repo created, design next |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
 
@@ -378,14 +378,23 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
    (`POST /auth/token/refresh`); 6b logout, devices list/remove, revoked devices in Redis db 2.
 7. ✅ Observability: 7a tracing (OpenTelemetry -> Alloy -> Tempo, `trace_id` in logs);
    7b metrics (`/metrics` scraped by Prometheus).
-8. Dummy Expo app against it (phase 8).
+8. The mobile app against it (phase 8).
 9. ✅ Real SMS provider behind a flag (`SMS_PROVIDER`), with all cost guards: Global SMS, live since 2026-10-26.
 10. Linking devices by QR (after step 6, needs the primary's access token): up to 4 linked devices, design in
     section 8 "Later" → moved here.
 
-### Phase 8: Dummy Expo app
-- Phone entry → OTP → token storage (secure store) → a "hello" screen that calls an authenticated endpoint.
-- Proves the end-to-end trace from app → ingress → auth → Postgres in Grafana.
+### Phase 8: Mobile app foundation (repo `mobile-app`)
+**The real app, not a demo** (decided 2026-11-06): only the login flow for now, but structure, tooling and
+tests are the foundation for everything later (chats over WebSocket, local message store, media, push, E2E).
+Build steps (each agreed with the owner and merged before the next; detail in `mobile-app/README.md`):
+1. Design, agreed with the owner before code: Expo SDK, navigation, state and server-data handling, API
+   client and types, secure token storage, styling, Hebrew + RTL, tests, lint, CI, how to run it on the
+   owner's phone at no cost. Then the skeleton (no features) + CI.
+2. Login: phone entry → SMS code (`otp/request`, `otp/verify`) → register a new user (display name) →
+   tokens in secure storage.
+3. Session: refresh before expiry (one refresh at a time; the device is the chain), sign-out on
+   `invalid_token`, logout, the devices screen (primary only).
+4. End-to-end check: one login traced app → ingress → auth → Postgres in Grafana.
 
 ### Phase 9: Real chat-service
 - JWT validation through JWKS.
@@ -455,3 +464,4 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 | 2026-11-02 | Phase 7 step 6b: `POST /auth/logout`, `GET/DELETE /auth/devices` (WhatsApp model: only the primary manages devices). Revoked devices published in a new Redis db 2 shared by the services (`revoked:device:<id>`, 17 min; marker `revoked:synced`), rewritten every minute by auth; chat-service reads it and accepts on a Redis outage. `k8s/auth.yaml`: `SHARED_REDIS_URL`. (auth-service, chat-infra) |
 | 2026-11-03 | Phase 7 step 7a: auth-service traces every request with OpenTelemetry (FastAPI, SQLAlchemy, redis, httpx instrumentations) to Alloy -> Tempo; log lines carry `trace_id`. `k8s/auth.yaml`: `OTEL_EXPORTER_OTLP_ENDPOINT`. (auth-service, chat-infra) |
 | 2026-11-04 | Phase 7 step 7b: auth-service serves Prometheus metrics at `/metrics` (requests by route/status, latency histogram, OTP/SMS/login/refresh/revocation/background-job counters); `k8s/auth.yaml` pod annotations `prometheus.io/scrape|port|path` (the chart's default `kubernetes-pods` job scrapes them). (auth-service, chat-infra) |
+| 2026-11-06 | Phase 8 renamed from "Dummy Expo app" to **Mobile app foundation**: the real app, starting with only the login flow. New repo `mobile-app` (CLAUDE.md + SessionStart hook loading these docs, like the services; it hands chat-infra changes to the chat-infra session instead of editing them). (chat-infra, mobile-app) |

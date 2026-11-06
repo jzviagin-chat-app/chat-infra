@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-11-05.
+Last updated: 2026-11-06.
 
 ---
 
@@ -15,7 +15,7 @@ Last updated: 2026-11-05.
 | `chat-infra` | Terraform (Oracle Cloud), Kubernetes manifests (`k8s/`, deployed by Argo CD), hand-run jobs (`manual/`), **all system docs (`docs/`)** | live |
 | `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`), sessions (`token/refresh`, `logout`, `devices`), `jwks.json`; traces and metrics |
 | `chat-service` | WebSocket messaging. Will use the same stack as auth-service | placeholder (echo server) |
-| mobile app (later) | Expo / React Native + TypeScript | not started |
+| `mobile-app` | The phone app (Expo / React Native + TypeScript). The real app's foundation; first feature: login | repo created, design next (phase 8) |
 
 `main` is protected everywhere: changes arrive only through pull requests, admins included.
 
