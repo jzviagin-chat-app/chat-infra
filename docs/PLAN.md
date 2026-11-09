@@ -327,7 +327,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
 | **7** | **Production auth-service** | 🔨 in progress: steps 1–7 and 9 ✅; step 8 = phase 8 (mobile app), step 10 (QR linking) later |
-| **8** | **Mobile app foundation** (first feature: login) | 🔨 repo created, design next |
+| **8** | **Mobile app foundation** (first feature: login) | 🔨 step 1 ✅ (design + skeleton + CI); step 2 (login) next |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
 
@@ -387,9 +387,18 @@ Build steps (each tested and deployed before the next; detail in `auth-service/R
 **The real app, not a demo** (decided 2026-11-06): only the login flow for now, but structure, tooling and
 tests are the foundation for everything later (chats over WebSocket, local message store, media, push, E2E).
 Build steps (each agreed with the owner and merged before the next; detail in `mobile-app/README.md`):
-1. Design, agreed with the owner before code: Expo SDK, navigation, state and server-data handling, API
+1. ✅ Design, agreed with the owner before code: Expo SDK, navigation, state and server-data handling, API
    client and types, secure token storage, styling, Hebrew + RTL, tests, lint, CI, how to run it on the
    owner's phone at no cost. Then the skeleton (no features) + CI.
+   Decided 2026-11-06 (detail: `mobile-app/README.md`): Expo SDK 58 development build (never Expo Go: own
+   native code allowed), built locally for free; dev phone = Android (Galaxy S22 Ultra), iOS via the
+   simulator (iPhone 6s can't run SDK 58). Expo Router (`Stack.Protected` switches logged-out/logged-in).
+   MobX stores in front, TanStack Query core behind (our `MobxQuery` adapter); per-id models for detail
+   screens. React 19 `useActionState` for form submits. `openapi-typescript` + `openapi-fetch` from
+   auth-service's dev-only OpenAPI schema (snapshot committed). Tokens in expo-secure-store. StyleSheet +
+   light/dark tokens; language follows the phone (he/en, fallback en), RTL. Jest + RNTL, ESLint + Prettier,
+   TS strict; GitHub Actions job `check` on PRs and on main (x86 runner: Hermes has no Linux Arm binary).
+   App name "Walkie Talkie", id `com.jzviagin.chatapp`.
 2. Login: phone entry → SMS code (`otp/request`, `otp/verify`) → register a new user (display name) →
    tokens in secure storage.
 3. Session: refresh before expiry (one refresh at a time; the device is the chain), sign-out on
@@ -439,6 +448,14 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
   - Monitoring object-storage request counts.
   - Alerting in Grafana.
 - Autoscaling of pods. Node autoscaling and migration to AWS are only for if we ever leave the free tier.
+- **Mobile release builds + over-the-air updates:** a release APK and `expo-updates` with EAS Update (free
+  plan: 1,000 monthly active users, free Expo account). iOS device builds and iOS push need the paid Apple
+  Developer Program: decide before push notifications.
+- **Mobile app observability (debugging production):** crash reports and JavaScript errors with stack traces,
+  masked app logs, and traces that continue into the backend (`traceparent` on API calls: app → ingress →
+  auth in Grafana). Free only; never tokens, codes or full phone numbers. To decide then: our own stack
+  (needs a public, rate-limited Alloy/OTLP endpoint through the ingress: an infra change) or a hosted crash
+  reporter with a hard-capped free tier. The `traceparent` part comes earlier, in phase 8 step 4.
 
 ---
 
@@ -465,3 +482,4 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
 | 2026-11-03 | Phase 7 step 7a: auth-service traces every request with OpenTelemetry (FastAPI, SQLAlchemy, redis, httpx instrumentations) to Alloy -> Tempo; log lines carry `trace_id`. `k8s/auth.yaml`: `OTEL_EXPORTER_OTLP_ENDPOINT`. (auth-service, chat-infra) |
 | 2026-11-04 | Phase 7 step 7b: auth-service serves Prometheus metrics at `/metrics` (requests by route/status, latency histogram, OTP/SMS/login/refresh/revocation/background-job counters); `k8s/auth.yaml` pod annotations `prometheus.io/scrape|port|path` (the chart's default `kubernetes-pods` job scrapes them). (auth-service, chat-infra) |
 | 2026-11-06 | Phase 8 renamed from "Dummy Expo app" to **Mobile app foundation**: the real app, starting with only the login flow. New repo `mobile-app` (CLAUDE.md + SessionStart hook loading these docs, like the services; it hands chat-infra changes to the chat-infra session instead of editing them). (chat-infra, mobile-app) |
+| 2026-11-06 | Phase 8 step 1 done: mobile-app design agreed and recorded in its README (Expo SDK 58 development build, Expo Router, MobX + TanStack Query core, useActionState, OpenAPI-generated types, secure-store tokens, he/en + RTL, light/dark) and the skeleton merged with CI job `check` on PRs and main. Release builds + expo-updates and mobile app observability (crash reports, logs, traces into the backend) added to Later. (mobile-app, chat-infra) |
