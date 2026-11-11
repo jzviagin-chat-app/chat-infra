@@ -31,7 +31,7 @@ spec:
       initContainers:
         - name: migrate
           # Must be the same image as the app below. The auth-service pipeline bumps both tags.
-          image: ghcr.io/jzviagin-chat-app/auth-service:sha-f9b087c29a4d
+          image: ghcr.io/jzviagin-chat-app/auth-service:sha-26ee5351b824
           command: ["alembic", "upgrade", "head"]
           env:
             - name: DATABASE_URL
@@ -48,7 +48,7 @@ spec:
       containers:
         - name: auth
           # The tag is bumped automatically by a PR from the auth-service pipeline.
-          image: ghcr.io/jzviagin-chat-app/auth-service:sha-f9b087c29a4d
+          image: ghcr.io/jzviagin-chat-app/auth-service:sha-26ee5351b824
           ports:
             - containerPort: 8000
           env:
