@@ -298,11 +298,11 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
   Selected by `SMS_PROVIDER=globalsms`; `fake` in development and CI. Spending protection:
   - Prepaid credit only: we can never spend more than what was bought.
   - A global daily SMS cap in our code (`GLOBALSMS_DAILY_CAP`, default 100), plus per-phone and per-IP rate limits. Decided 2026-10-21:
-    per-phone / per-IP counters in **Redis** (atomic `INCR` + expiry; a flood is rejected without touching
+    per-phone / per-IP counters in **Redis** (one atomic Lua script: check every limit, then `INCR` + expiry; a flood is rejected without touching
     Postgres; losing them on a Redis restart is acceptable). A request refused by any limit changes no counter
     (check first, count only what is sent: one Lua script, so two pods can't both take the last slot), and one
-    refused by the global daily cap has its counts taken back; a failed send stays counted (the SMS may have
-    gone out). The global daily cap in **Postgres**
+    refused by our global daily SMS cap has its counts taken back (nothing was sent); a send the SMS provider
+    fails stays counted, whatever the provider's error (the SMS may have gone out). The global daily cap in **Postgres**
     (`sms_daily_usage`, one atomic `UPDATE … SET sent = sent + 1 WHERE … sent < cap RETURNING`): it guards
     money, so it must survive restarts and be exact when two pods race. If Redis is unreachable, auth
     refuses to send codes (fail closed); everything else keeps working.
