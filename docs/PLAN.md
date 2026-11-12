@@ -299,7 +299,10 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
   - Prepaid credit only: we can never spend more than what was bought.
   - A global daily SMS cap in our code (`GLOBALSMS_DAILY_CAP`, default 100), plus per-phone and per-IP rate limits. Decided 2026-10-21:
     per-phone / per-IP counters in **Redis** (atomic `INCR` + expiry; a flood is rejected without touching
-    Postgres; losing them on a Redis restart is acceptable). The global daily cap in **Postgres**
+    Postgres; losing them on a Redis restart is acceptable). A request refused by any limit changes no counter
+    (check first, count only what is sent: one Lua script, so two pods can't both take the last slot), and one
+    refused by the global daily cap has its counts taken back; a failed send stays counted (the SMS may have
+    gone out). The global daily cap in **Postgres**
     (`sms_daily_usage`, one atomic `UPDATE … SET sent = sent + 1 WHERE … sent < cap RETURNING`): it guards
     money, so it must survive restarts and be exact when two pods race. If Redis is unreachable, auth
     refuses to send codes (fail closed); everything else keeps working.
@@ -483,3 +486,4 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
 | 2026-11-04 | Phase 7 step 7b: auth-service serves Prometheus metrics at `/metrics` (requests by route/status, latency histogram, OTP/SMS/login/refresh/revocation/background-job counters); `k8s/auth.yaml` pod annotations `prometheus.io/scrape|port|path` (the chart's default `kubernetes-pods` job scrapes them). (auth-service, chat-infra) |
 | 2026-11-06 | Phase 8 renamed from "Dummy Expo app" to **Mobile app foundation**: the real app, starting with only the login flow. New repo `mobile-app` (CLAUDE.md + SessionStart hook loading these docs, like the services; it hands chat-infra changes to the chat-infra session instead of editing them). (chat-infra, mobile-app) |
 | 2026-11-06 | Phase 8 step 1 done: mobile-app design agreed and recorded in its README (Expo SDK 58 development build, Expo Router, MobX + TanStack Query core, useActionState, OpenAPI-generated types, secure-store tokens, he/en + RTL, light/dark) and the skeleton merged with CI job `check` on PRs and main. Release builds + expo-updates and mobile app observability (crash reports, logs, traces into the backend) added to Later. (mobile-app, chat-infra) |
+| 2026-11-12 | auth-service: clearer OTP answers for the login screen. A 429 names the limit (`resend_cooldown`, `phone_hour`, `phone_day`, `ip_hour`, `ip_day`) with `retry_after_seconds`; the daily-cap 503 sends `Retry-After`; `otp/verify` adds `too_many_attempts` (5th wrong try onward) and `attempts_left` / `resend_after_seconds` on code errors. Refused requests are no longer counted. ARCHITECTURE §5.5: errors may carry machine-readable fields. (auth-service#14) |
