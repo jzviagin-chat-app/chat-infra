@@ -15,7 +15,7 @@ Last updated: 2026-11-19.
 | `chat-infra` | Terraform (Oracle Cloud), Kubernetes manifests (`k8s/`, deployed by Argo CD), hand-run jobs (`manual/`), **all system docs (`docs/`)** | live |
 | `auth-service` | Phone + SMS-code signup/login, devices, tokens. Python 3.14 / async FastAPI / Postgres | live: sign-up/login (`otp/request`, `otp/verify`, `register`), sessions (`token/refresh`, `logout`, `devices`), `jwks.json`; traces and metrics |
 | `chat-service` | WebSocket messaging. Will use the same stack as auth-service | placeholder (echo server) |
-| `mobile-app` | The phone app (Expo / React Native + TypeScript). The real app's foundation; first feature: login | skeleton: boots to the logged-out screen; CI (phase 8 step 1). Expo SDK 58, Expo Router, MobX + TanStack Query |
+| `mobile-app` | The phone app (Expo / React Native + TypeScript). The real app's foundation; first feature: login | login (phase 8 step 2): SMS code sign-in and registration against auth-service, signed in across restarts, sign-out; CI. Expo SDK 58, Expo Router, MobX + TanStack Query |
 
 `main` is protected everywhere: changes arrive only through pull requests, admins included.
 
