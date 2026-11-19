@@ -330,7 +330,7 @@ Full detail: `auth-service/README.md`. Decided on 2026-10-12/13:
 | 5 | Postgres for auth + nightly backups | ✅ done (restore drill passed) |
 | 6 | Cassandra for chat | ✅ done (restore drill passed) |
 | **7** | **Production auth-service** | 🔨 in progress: steps 1–7 and 9 ✅; step 8 = phase 8 (mobile app), step 10 (QR linking) later |
-| **8** | **Mobile app foundation** (first feature: login) | 🔨 step 1 ✅ (design + skeleton + CI); step 2 (login) next |
+| **8** | **Mobile app foundation** (first feature: login) | 🔨 steps 1–2 ✅ (design, skeleton, CI, login); step 3 (session) next |
 | 9 | Real chat-service messaging | ⏳ |
 | 10+ | Later items (section 8) | ⏳ |
 
@@ -402,8 +402,23 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
    light/dark tokens; language follows the phone (he/en, fallback en), RTL. Jest + RNTL, ESLint + Prettier,
    TS strict; GitHub Actions job `check` on PRs and on main (x86 runner: Hermes has no Linux Arm binary).
    App name "Walkie Talkie", id `com.jzviagin.chatapp`.
-2. Login: phone entry → SMS code (`otp/request`, `otp/verify`) → register a new user (display name) →
-   tokens in secure storage.
+2. ✅ Login: phone → SMS code (`otp/request`, `otp/verify`) → register a new user (display name) →
+   tokens in secure storage; sign-out (moved here from step 3). Decided with the owner (2026-11-09…18,
+   detail: `mobile-app/README.md` §6–7):
+   - One /auth route with a state machine (phone → code → name); "Change number" clears the login and works
+     at any time unless the device is locked; the name step has no way back; Android back does nothing on
+     the code and name steps.
+   - The code step stays in every case: wrong code (tries left), too many tries (field disabled until a new
+     code), an expired code ("request a new one"; also the server's `code_expired`). An expired
+     registration token starts over at the phone step.
+   - Waits from auth-service's answers (`limit`, `retry_after_seconds`, `resend_after_seconds`,
+     `Retry-After`) are kept as **send blocks** in secure storage, apart from the login: one device lock
+     (`ip_*`, the daily SMS cap) and one wait per number. They outlive sign-in, sign-out and back; a waiting
+     number shows its countdown and sends nothing; other numbers are free unless the device is locked. A
+     refused request never moves the login on.
+   - The code / name step survives closing the app (secure storage, saved automatically after every change);
+     deadlines are absolute times on the phone's clock. The user's own number may be shown to them; tokens
+     and other people's numbers never.
 3. Session: refresh before expiry (one refresh at a time; the device is the chain), sign-out on
    `invalid_token`, logout, the devices screen (primary only).
 4. End-to-end check: one login traced app → ingress → auth → Postgres in Grafana.
@@ -488,3 +503,4 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
 | 2026-11-06 | Phase 8 step 1 done: mobile-app design agreed and recorded in its README (Expo SDK 58 development build, Expo Router, MobX + TanStack Query core, useActionState, OpenAPI-generated types, secure-store tokens, he/en + RTL, light/dark) and the skeleton merged with CI job `check` on PRs and main. Release builds + expo-updates and mobile app observability (crash reports, logs, traces into the backend) added to Later. (mobile-app, chat-infra) |
 | 2026-11-12 | auth-service: clearer OTP answers for the login screen. A 429 names the limit (`resend_cooldown`, `phone_hour`, `phone_day`, `ip_hour`, `ip_day`) with `retry_after_seconds`; the daily-cap 503 sends `Retry-After`; `otp/verify` adds `too_many_attempts` (5th wrong try onward) and `attempts_left` / `resend_after_seconds` on code errors. Refused requests are no longer counted. ARCHITECTURE §5.5: errors may carry machine-readable fields. (auth-service#14) |
 | 2026-11-19 | auth-service: the `otp/request` 202 names the limit behind a long wait (`limit`: `phone_hour` / `phone_day` / `ip_hour` / `ip_day`, as in the 429; absent on a plain cooldown), so clients can tell a number's wait from the network's. ARCHITECTURE §5.5: success answers may carry machine-readable fields too. (auth-service#15) |
+| 2026-11-19 | Phase 8 step 2 done: the mobile app signs in by SMS code against auth-service (register for a new number, tokens in secure storage, sign-out). Login rules recorded in phase 8 item 2: the code step stays, waits from auth-service's 429/503/verify answers kept per number and per device and across restarts. (mobile-app#2) |
