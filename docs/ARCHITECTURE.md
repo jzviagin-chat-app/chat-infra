@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-11-12.
+Last updated: 2026-11-19.
 
 ---
 
@@ -146,7 +146,9 @@ keep the old behaviour working until every consumer is updated.
 - JSON in and out. Errors: `{"error": "<machine_code>", "message": "<human text>"}`; clients branch on `error`,
   never on `message`. Some errors add machine-readable fields next to them (e.g. `limit`, `retry_after_seconds`,
   `attempts_left`, `resend_after_seconds`), each documented with its endpoint. They hold only counts, seconds and
-  fixed names, never a phone number, code or token. A `429` or `503` that knows the wait also sends `Retry-After`.
+  fixed names, never a phone number, code or token. A success answer may carry such a field too (e.g. auth's
+  `otp/request` 202 has `limit` when the next code waits for a full hour/day window rather than the cooldown).
+  A `429` or `503` that knows the wait also sends `Retry-After`.
 - Health: `GET /healthz` (Kubernetes probes) and `GET /<prefix>/healthz` (through the ingress).
 - Phone numbers are always E.164 (`+972501234567`).
 
