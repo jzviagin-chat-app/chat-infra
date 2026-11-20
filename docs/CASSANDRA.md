@@ -66,8 +66,20 @@ Useful: `DESCRIBE KEYSPACE chat;`, `SELECT * FROM chat.<table> LIMIT 10;`, `exit
 ## Message numbers (decided in phase 6)
 Numbers come from lightweight transactions: "set the counter from N to N+1 only if it is still N, else retry".
 Benchmark on this cluster: 287 numbers/s with 20 writers on 20 devices (median 66 ms), 43/s with 20 writers
-fighting over one device, 0 duplicates. Rule for readers: a number can be handed out slightly before its
-message is written, so devices advance their cursor only over numbers with nothing missing below.
+fighting over one device, 0 duplicates.
+
+**Revised (2026-11-20, not built yet):** inbox numbers are taken in the same atomic write as the inbox row, so a
+number never exists without its message (the old counter-first order could lose messages; `PLAN.md` §5.1):
+```sql
+-- inbox_by_device gets:  last_seq bigint STATIC   (one value per device partition)
+BEGIN BATCH
+  UPDATE inbox_by_device SET last_seq = 7 WHERE device_id = ? IF last_seq = 6;
+  INSERT INTO inbox_by_device (device_id, inbox_seq, msg_id, ...) VALUES (?, 7, ?, ...);
+APPLY BATCH;   -- conflict: retry with the next number
+```
+`device_inbox_seq` stays as a never-expiring copy, read only when the static value has expired with the rows.
+To test before phase 9: atomicity under contention, speed, expiry + TimeWindowCompaction with the static column.
+Conversation numbers keep the counter row (display order only).
 
 ## Backups
 The `backup` container in the `cassandra-0` pod sleeps until **00:45 UTC** and then:

@@ -129,8 +129,48 @@ Before each new database is added, check with `kubectl top node ops`. If it's to
 
 ## 4. Messaging design (chat-service)
 
+### System overview (phase 9, planned)
+```mermaid
+flowchart LR
+  phone["Phone app<br/>SQLite store · outbox · cursor"]
+
+  subgraph cluster["k3s cluster (Oracle, Jerusalem)"]
+    lb["HAProxy ingress<br/>(lb VM)"]
+    subgraph chatsvc["chat-service pods"]
+      gw["gateway module<br/>sockets · token check · registry"]
+      chat["chat module<br/>numbering · inbox writes · sync"]
+    end
+    auth["auth-service pods"]
+    redis[("Redis db 2<br/>conn:&lt;device&gt; → holder<br/>holder channels · revoked:device:*")]
+    cass[("Cassandra<br/>inbox_by_device · messages_by_conversation")]
+    pg[("Postgres<br/>users · devices · tokens")]
+  end
+
+  phone -- "wss /ws" --> lb
+  phone -- "https /auth/*" --> lb
+  lb --> gw
+  lb --> auth
+  gw -- "1 · one message at a time (request / reply ✓)" --> chat
+  chat -- "2 · atomic number + inbox row" --> cass
+  chat -- "3 · look up holder, publish 'deliver to X'" --> redis
+  redis -- "4 · holder channel" --> gw
+  gw -- "5 · frame to the device's socket" --> phone
+  gw -- "write registry, then check revoked" --> redis
+  auth --> pg
+  auth -- "revoked key, then 'close X' to the holder" --> redis
+```
+- 1–5 = the send flow (§4.3). ✓ comes back at step 1, once step 2 is done.
+- The gateway and chat modules never import each other: later they become separate services (§4.1).
+- Sign-out: auth-service → the device's holder channel → the gateway sends `signed_out` and closes the socket
+  (`ARCHITECTURE.md` §5.1).
+
 ### 4.1 Transport
 - The client keeps **one WebSocket** to the server: relay through the server, no peer-to-peer.
+- **Gateway (decided 2026-11-20):** the socket layer, a pure router per device: WebSocket `/ws`, token check on
+  connect, the registry, writing frames to a socket and closing it. No inbox reads, no reordering, no chat
+  logic. For now a separate module inside chat-service; later its own service and repo. To keep the split
+  easy: `gateway/` and `chat/` never import each other, and the messages between them (the device protocol,
+  "handle this frame", "deliver to / close device X") are a written schema, not shared Python code.
 - **Push notifications are only a "doorbell".** They wake the app, which then connects and pulls. They never carry the message.
 - Typing and online indicators are ephemeral WebSocket events and are never stored.
 
@@ -139,23 +179,32 @@ Every **device** has an inbox: an append-only list of messages it hasn't confirm
 **gap-free `inbox_seq`**.
 - The client stores messages in local SQLite, keeps a **cursor** (last seq it persisted), then sends a
   **cumulative ack** ("I have everything up to N"). Persist first, ack second.
-- Dedup by `msg_id` (client-generated UUID), so retries are always safe.
+- Dedup by `msg_id` (client-generated UUID), so retries are always safe (where the check lives: open, §7).
 - Reconnect = "give me everything after my cursor".
+- **The cursor never skips a missing number.** Messages can reach a device out of order (several chat
+  instances deliver to it); on a gap the device asks for "everything after my cursor". The display order
+  is the conversation `seq`, not the arrival order. (Holes can't exist: §5.1.)
 
-### 4.3 Send flow
+### 4.3 Send flow (revised 2026-11-20)
 ```
-sender ──ws──► chat instance A (ingress)
-   A: write message into each recipient device's inbox (Cassandra)
-   A: ack sender  ✓  (server has it)
-   A: look up conn:<device> in Redis → instance B
-   A: PUBLISH inst:<B> "device X has new messages"
-   B: (notify + pull) read inbox after sent_up_to[X], push over ws
-recipient device: persist → ack ✓✓ (delivered)
+sender ──ws──► gateway (holds the sender's socket)
+   gateway → chat (request/response, ONE message at a time per device; any chat instance)
+   chat: number + write the message into each recipient device's inbox (Cassandra, §5.1)
+   chat → gateway: reply ✓ (stored) → gateway → sender; only now the device's next message is forwarded
+   chat: for each recipient device, look up conn:<device_id> → holder (a gateway)
+   chat: PUBLISH on the holder's channel "deliver this frame to device X"; not connected → nothing now
+   holder gateway: write the frame to X's socket
+recipient device: persist → cumulative ack (✓✓: how it reaches the sender is open, §7)
 ```
-- **Coalescing:** each instance keeps in memory `sent_up_to` for each connected device. Many notifications
-  become one read.
-- **Registry:** `conn:<device_id>` → pod name, with a TTL refreshed by a heartbeat. Each instance subscribes
-  to its own channel `inst:<POD_NAME>`.
+- **✓ means stored, not delivered.** Retry on another chat instance with the same `msg_id`. chat-service
+  down: the gateway keeps the sockets open and answers "unavailable"; the app keeps unsent messages in its
+  outbox and resends later. No message bus (Kafka) needed for this.
+- **Not connected:** the inbox keeps the message (30 days); on connect the device asks "everything after my
+  cursor" and chat-service answers from the inbox. No egress chat instance any more.
+- **Registry:** `conn:<device_id>` → holder id (the gateway holding the socket), with a TTL refreshed by a
+  heartbeat; each holder subscribes to its own channel. Registry and holder channels are shared between
+  services (Redis db 2) because auth-service uses them too (sign-out, `ARCHITECTURE.md` §5.1); channel names
+  carry a clear prefix, since Redis pub/sub ignores the db number.
 - **If Redis is lost**, nothing breaks permanently. Clients reconnect, the registry rebuilds itself, and inboxes are in the DB.
 - **Multi-device:** users → devices. A message fans out to every recipient device **and** the sender's
   other devices.
@@ -226,15 +275,24 @@ CREATE TABLE messages_by_conversation (
 Rules:
 - **All writes are idempotent.** Retrying with the same key overwrites with the same value.
 - The ack cursor lives on the device. Inbox rows simply expire; nothing deletes them one by one.
-- **Decided (phase 6): numbers come from lightweight transactions (LWT)** on a per-device / per-conversation
-  counter row: "set from N to N+1 only if it is still N, else retry".
-  - Benchmark on this cluster: 287 numbers/s with 20 writers on 20 devices (median 66 ms); 43/s with 20 writers
-    on one device; 0 duplicates, 0 gaps.
-  - If the one-busy-device case ever matters: queue each device's numbering inside a chat-service process.
-    Fallback: option B, a single owner per device that allocates in memory (same tables).
-  - **Reader rule:** a number can be handed out slightly before its message is written. So a device advances its
-    cursor only over numbers with nothing missing below. If a hole stays for longer than a few seconds, skip it:
-    its writer died, and the sender (not yet acked ✓) resends with the same `msg_id`.
+- **Numbers come from lightweight transactions (LWT)** (decided in phase 6): "set from N to N+1 only if it
+  is still N, else retry". Benchmark on this cluster (counter row): 287 numbers/s with 20 writers on 20 devices
+  (median 66 ms); 43/s with 20 writers on one device; 0 duplicates, 0 gaps.
+- **Inbox numbers are taken in the same atomic write as the inbox row (decided 2026-11-20).** Bug found in
+  the phase 6 design: with a separate counter, a number existed before its message was written, so a reader
+  could pass it (the instance's `sent_up_to`, the device's "skip a hole after a few seconds") and the message
+  was lost for good. Now: one conditional batch on the device's partition of `inbox_by_device` (a new
+  `last_seq` **static** column): "set `last_seq` from N to N+1 IF it is still N" + insert row N+1 with the
+  message; on conflict retry with the next number. A number never exists without its message: no holes, so
+  devices never skip.
+  - The static value expires with the rows (30 days after the device's last message). `device_inbox_seq`
+    stays as a never-expiring copy, updated after each insert, read only when the static value is gone.
+  - **To test before phase 9** (a manual job, like the phase 6 benchmark): atomicity under contention, speed
+    with the message inside the transaction, expiry and TimeWindowCompaction with the static column.
+  - Known costs: one LWT per recipient device (a slow ✓ for big groups), contention on one busy device,
+    timeouts with an unknown result (a retry must find out whether the row exists: `msg_id` dedup, §7).
+  - Conversation numbers (`conversation_seq`) keep the counter row: they only order the display, and a gap
+    there is harmless.
 - Optional later: archive old history months to object storage.
 - Under E2E the server stores only ciphertext. Restoring history on a new device needs a key-backup
   design (later).
@@ -440,6 +498,12 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
   Pulsar PIP-292 (auth challenge on the open connection), Ably (renewal without disconnect, 30 s margin).
   The owner prefers checking the revoked key on every message (not only when a token arrives); decide with the
   rest in phase 9.
+- **Dedup by `msg_id` per inbox (phase 9):** checked before a number is taken, so a retry (lost ✓, or a
+  timeout with an unknown result) never gets a second number. Where the `msg_id` → number record lives: open.
+- **✓✓ delivery (phase 9):** how the recipient device's cumulative ack becomes "message M delivered" for the
+  sender, where it is stored for a sender who was offline, and what it means with several devices / groups.
+- **Gateway details (phase 9):** the close code for `signed_out`, the channel names, the schema format for
+  the gateway ↔ chat messages.
 
 ---
 
@@ -466,6 +530,9 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
   - Monitoring object-storage request counts.
   - Alerting in Grafana.
 - Autoscaling of pods. Node autoscaling and migration to AWS are only for if we ever leave the free tier.
+- **No multi-region for now** (decided 2026-11-20): users are in Israel, like the cluster. Voice/video calls
+  later as signaling over the existing socket plus media servers near the users (TURN, SFU), independent of
+  chat.
 - **Mobile release builds + over-the-air updates:** a release APK and `expo-updates` with EAS Update (free
   plan: 1,000 monthly active users, free Expo account). iOS device builds and iOS push need the paid Apple
   Developer Program: decide before push notifications.
@@ -504,3 +571,4 @@ Build steps (each agreed with the owner and merged before the next; detail in `m
 | 2026-11-12 | auth-service: clearer OTP answers for the login screen. A 429 names the limit (`resend_cooldown`, `phone_hour`, `phone_day`, `ip_hour`, `ip_day`) with `retry_after_seconds`; the daily-cap 503 sends `Retry-After`; `otp/verify` adds `too_many_attempts` (5th wrong try onward) and `attempts_left` / `resend_after_seconds` on code errors. Refused requests are no longer counted. ARCHITECTURE §5.5: errors may carry machine-readable fields. (auth-service#14) |
 | 2026-11-19 | auth-service: the `otp/request` 202 names the limit behind a long wait (`limit`: `phone_hour` / `phone_day` / `ip_hour` / `ip_day`, as in the 429; absent on a plain cooldown), so clients can tell a number's wait from the network's. ARCHITECTURE §5.5: success answers may carry machine-readable fields too. (auth-service#15) |
 | 2026-11-19 | Phase 8 step 2 done: the mobile app signs in by SMS code against auth-service (register for a new number, tokens in secure storage, sign-out). Login rules recorded in phase 8 item 2: the code step stays, waits from auth-service's 429/503/verify answers kept per number and per device and across restarts. (mobile-app#2) |
+| 2026-11-20 | Phase 9 messaging design revised (from the mobile-app instant-sign-out handoff): inbox numbers taken in the same atomic write as the inbox row (static `last_seq`, conditional batch), fixing a message-loss bug in the counter-first design; devices never skip a missing number (test before phase 9). A gateway (pure socket router, one message at a time per device, ✓ = stored) as a separate module of chat-service, split out later; deliveries and sign-outs via the device's holder channel (registry + channels in Redis db 2, no broadcast). Open: `msg_id` dedup, ✓✓ delivery, gateway details. No multi-region for now. (chat-infra) |
