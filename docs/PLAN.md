@@ -129,6 +129,41 @@ Before each new database is added, check with `kubectl top node ops`. If it's to
 
 ## 4. Messaging design (chat-service)
 
+### System overview (phase 9, planned)
+```mermaid
+flowchart LR
+  phone["Phone app<br/>SQLite store · outbox · cursor"]
+
+  subgraph cluster["k3s cluster (Oracle, Jerusalem)"]
+    lb["HAProxy ingress<br/>(lb VM)"]
+    subgraph chatsvc["chat-service pods"]
+      gw["gateway module<br/>sockets · token check · registry"]
+      chat["chat module<br/>numbering · inbox writes · sync"]
+    end
+    auth["auth-service pods"]
+    redis[("Redis db 2<br/>conn:&lt;device&gt; → holder<br/>holder channels · revoked:device:*")]
+    cass[("Cassandra<br/>inbox_by_device · messages_by_conversation")]
+    pg[("Postgres<br/>users · devices · tokens")]
+  end
+
+  phone -- "wss /ws" --> lb
+  phone -- "https /auth/*" --> lb
+  lb --> gw
+  lb --> auth
+  gw -- "1 · one message at a time (request / reply ✓)" --> chat
+  chat -- "2 · atomic number + inbox row" --> cass
+  chat -- "3 · look up holder, publish 'deliver to X'" --> redis
+  redis -- "4 · holder channel" --> gw
+  gw -- "5 · frame to the device's socket" --> phone
+  gw -- "write registry, then check revoked" --> redis
+  auth --> pg
+  auth -- "revoked key, then 'close X' to the holder" --> redis
+```
+- 1–5 = the send flow (§4.3). ✓ comes back at step 1, once step 2 is done.
+- The gateway and chat modules never import each other: later they become separate services (§4.1).
+- Sign-out: auth-service → the device's holder channel → the gateway sends `signed_out` and closes the socket
+  (`ARCHITECTURE.md` §5.1).
+
 ### 4.1 Transport
 - The client keeps **one WebSocket** to the server: relay through the server, no peer-to-peer.
 - **Gateway (decided 2026-11-20):** the socket layer, a pure router per device: WebSocket `/ws`, token check on
