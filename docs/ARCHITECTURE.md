@@ -4,7 +4,7 @@ The current shape of the whole system: which services exist, what each owns, how
 and the conventions every repo follows. **Keep it true:** when a change alters anything here, update this file
 in the same task (and add a row to the change log in `PLAN.md`). Plans and phases live in `PLAN.md`.
 
-Last updated: 2026-11-19.
+Last updated: 2026-11-20.
 
 ---
 
@@ -124,19 +124,33 @@ keep the old behaviour working until every consumer is updated.
 
   auth-service only writes these keys; chat-service only reads them. Redis down or marker missing: chat-service
   accepts the token (risk accepted by the owner, 2026-11-02).
+- **Sign-out of a connected device (planned, phase 9; decided 2026-11-20):** after writing
+  `revoked:device:<id>`, auth-service looks up `conn:<device_id>` (§5.3) and publishes "close device X" on that
+  holder's channel; the gateway sends `{"type":"signed_out"}` and closes the socket. No broadcast. The gateway,
+  on connect: verify the token's signature → write `conn:<device_id>` → check `revoked:device:<id>` (if revoked:
+  `signed_out`, close, remove the entry). Both sides write first and read the other's second, so a device
+  reconnecting at the moment of revocation is caught by one of them. Known window: from the Postgres commit to
+  the close (milliseconds; up to ~1 min if auth's Redis write is delayed; up to 15 min if Redis is down).
 
-### 5.2 WebSocket session (app ↔ chat-service)
+### 5.2 WebSocket session (app ↔ gateway; planned, phase 9)
+The socket is held by the **gateway**, a separate module of chat-service for now (its own service later;
+`PLAN.md` §4.1). The protocol below doesn't change when it is split out.
 - Connect to `wss://<host>/ws`, then send `{"type":"auth","token":"<access token>"}` within 5 s, or the
   server closes the socket. Tokens never go in the URL (URLs end up in logs).
+- A signed-out device gets `{"type":"signed_out"}` and the socket is closed (live, or when it reconnects).
+- The device's messages are handled one at a time: the next one is forwarded after the previous one's ✓.
 - Before the token expires, the app sends a fresh `auth` message on the same socket.
 - chat-service checks `revoked:device:<did>` at least whenever it receives a token (socket connect, each fresh
   `auth` message). **Open (decide in phase 9):** the owner prefers checking on every message; how expiry is
   enforced on an open socket. See `PLAN.md` section 7, "Open issues".
 
-### 5.3 Between chat-service instances (Redis)
-- `conn:<device_id>` → pod name of the instance holding that device's socket; TTL refreshed by heartbeat.
-- Each instance subscribes to channel `inst:<POD_NAME>`; publishing there means "device X has new messages"
-  (notify + pull; the receiver reads the inbox itself).
+### 5.3 Reaching a device: registry and holder channels (Redis db 2; planned, phase 9)
+- `conn:<device_id>` → id of the gateway (holder) with that device's socket; written by the gateway after the
+  token's signature is verified, TTL refreshed by heartbeat, removed when the socket closes.
+- Each holder subscribes to its own channel. Messages there: "deliver this frame to device X" (from
+  chat-service, after storing a message) and "close device X" (from auth-service, §5.1). The gateway writes
+  the frame to the socket as is; ordering and gaps are handled by the device (`PLAN.md` §4.2).
+- In db 2 because two services use them. Channel names carry a prefix (pub/sub ignores the db number).
 
 ### 5.4 chat-service's view of devices
 - `devices_by_user` (Cassandra) is filled by chat-service when a device connects with a valid token.
